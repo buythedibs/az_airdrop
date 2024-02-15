@@ -5,6 +5,8 @@ mod errors;
 #[ink::contract]
 mod az_airdrop {
     use crate::errors::AzAirdropError;
+    use ink::prelude::vec::Vec;
+    use ink::storage::Lazy;
     use ink::{
         env::CallFlags, prelude::string::ToString, reflect::ContractEventBase, storage::Mapping,
     };
@@ -20,6 +22,7 @@ mod az_airdrop {
     pub struct Config {
         token: AccountId,
         admin: AccountId,
+        sub_admins: Vec<AccountId>,
         start: Timestamp,
         default_collectable_at_tge: Option<u8>,
         default_cliff: Option<Timestamp>,
@@ -46,6 +49,8 @@ mod az_airdrop {
     #[ink(storage)]
     pub struct AzAirdrop {
         admin: AccountId,
+        sub_admin_mapping: Mapping<AccountId, AccountId>,
+        sub_admins_as_vec: Lazy<Vec<AccountId>>,
         token: AccountId,
         start: Timestamp,
         recipients: Mapping<AccountId, Recipient>,
@@ -65,6 +70,8 @@ mod az_airdrop {
             Self {
                 token,
                 admin: Self::env().caller(),
+                sub_admin_mapping: Mapping::default(),
+                sub_admins_as_vec: Default::default(),
                 start,
                 recipients: Mapping::default(),
                 default_collectable_at_tge,
@@ -79,6 +86,7 @@ mod az_airdrop {
             Config {
                 token: self.token,
                 admin: self.admin,
+                sub_admins: self.sub_admins_as_vec.get_or_default(),
                 start: self.start,
                 default_collectable_at_tge: self.default_collectable_at_tge,
                 default_cliff: self.default_cliff,
@@ -109,6 +117,25 @@ mod az_airdrop {
             .invoke()?;
 
             Ok(())
+        }
+
+        #[ink(message)]
+        pub fn sub_admins_add(&mut self, addresses: Vec<AccountId>) -> Result<Vec<AccountId>> {
+            self.airdrop_has_not_started()?;
+            let mut sub_admins: Vec<AccountId> = self.sub_admins_as_vec.get_or_default();
+            for address in &addresses {
+                if self.recipients.get(address).is_some() {
+                    return Err(AzAirdropError::UnprocessableEntity(
+                        "Already a sub admin".to_string(),
+                    ));
+                } else {
+                    sub_admins.push(address.clone());
+                    self.sub_admin_mapping.insert(address, &address.clone());
+                }
+            }
+            self.sub_admins_as_vec.set(&sub_admins);
+
+            Ok(sub_admins)
         }
 
         // === PRIVATE ===
@@ -156,6 +183,10 @@ mod az_airdrop {
             // * it returns the config
             assert_eq!(config.token, mock_token());
             assert_eq!(config.admin, accounts.bob);
+            assert_eq!(
+                config.sub_admins,
+                az_airdrop.sub_admins_as_vec.get_or_default()
+            );
             assert_eq!(config.start, MOCK_START);
             assert_eq!(config.default_collectable_at_tge, None);
             assert_eq!(config.default_cliff, None);
