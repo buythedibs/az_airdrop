@@ -15,6 +15,7 @@ mod az_airdrop {
     #[derive(Debug, Clone, scale::Encode, scale::Decode)]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
     pub struct Config {
+        token: AccountId,
         admin: AccountId,
         start: Timestamp,
         default_collectable_at_tge: Option<u8>,
@@ -42,6 +43,7 @@ mod az_airdrop {
     #[ink(storage)]
     pub struct AzAirdrop {
         admin: AccountId,
+        token: AccountId,
         start: Timestamp,
         recipients: Mapping<AccountId, Recipient>,
         default_collectable_at_tge: Option<u8>,
@@ -51,12 +53,14 @@ mod az_airdrop {
     impl AzAirdrop {
         #[ink(constructor)]
         pub fn new(
+            token: AccountId,
             start: Timestamp,
             default_collectable_at_tge: Option<u8>,
             default_cliff: Option<Timestamp>,
             default_vesting: Option<Timestamp>,
         ) -> Self {
             Self {
+                token,
                 admin: Self::env().caller(),
                 start,
                 recipients: Mapping::default(),
@@ -70,6 +74,7 @@ mod az_airdrop {
         #[ink(message)]
         pub fn config(&self) -> Config {
             Config {
+                token: self.token,
                 admin: self.admin,
                 start: self.start,
                 default_collectable_at_tge: self.default_collectable_at_tge,
@@ -100,8 +105,13 @@ mod az_airdrop {
         fn init() -> (DefaultAccounts<DefaultEnvironment>, AzAirdrop) {
             let accounts = default_accounts();
             set_caller::<DefaultEnvironment>(accounts.bob);
-            let az_airdrop = AzAirdrop::new(MOCK_START, None, None, None);
+            let az_airdrop = AzAirdrop::new(mock_token(), MOCK_START, None, None, None);
             (accounts, az_airdrop)
+        }
+
+        fn mock_token() -> AccountId {
+            let accounts: DefaultAccounts<DefaultEnvironment> = default_accounts();
+            accounts.django
         }
 
         // === TESTS ===
@@ -111,6 +121,7 @@ mod az_airdrop {
             let (accounts, az_airdrop) = init();
             let config = az_airdrop.config();
             // * it returns the config
+            assert_eq!(config.token, mock_token());
             assert_eq!(config.admin, accounts.bob);
             assert_eq!(config.start, MOCK_START);
             assert_eq!(config.default_collectable_at_tge, None);
