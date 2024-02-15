@@ -158,6 +158,24 @@ mod az_airdrop {
             Ok(sub_admins)
         }
 
+        pub fn add_to_recipient(&self, amount: Balance) -> Result<()> {
+            self.airdrop_has_not_started()?;
+            // Check that caller is either the admin or on the allowed list
+            let caller: AccountId = Self::env().caller();
+
+            PSP22Ref::transfer_from_builder(
+                &self.token,
+                from,
+                self.env().account_id(),
+                amount,
+                vec![],
+            )
+            .call_flags(CallFlags::default())
+            .invoke()?;
+
+            Ok(())
+        }
+
         // === PRIVATE ===
         fn airdrop_has_not_started(&self) -> Result<()> {
             let block_timestamp: Timestamp = Self::env().block_timestamp();
