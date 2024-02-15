@@ -5,7 +5,10 @@ mod errors;
 #[ink::contract]
 mod az_airdrop {
     use crate::errors::AzAirdropError;
-    use ink::{prelude::string::ToString, reflect::ContractEventBase, storage::Mapping};
+    use ink::{
+        env::CallFlags, prelude::string::ToString, reflect::ContractEventBase, storage::Mapping,
+    };
+    use openbrush::contracts::psp22::PSP22Ref;
 
     // === TYPES ===
     type Event = <AzAirdrop as ContractEventBase>::Type;
@@ -88,6 +91,36 @@ mod az_airdrop {
             self.recipients
                 .get(address)
                 .ok_or(AzAirdropError::NotFound("Recipient".to_string()))
+        }
+
+        // === HANDLES ===
+        // Not a must, but good to have function
+        #[ink(message)]
+        pub fn acquire_token(&self, amount: Balance, from: AccountId) -> Result<()> {
+            self.airdrop_has_not_started()?;
+            PSP22Ref::transfer_from_builder(
+                &self.token,
+                from,
+                self.env().account_id(),
+                amount,
+                vec![],
+            )
+            .call_flags(CallFlags::default())
+            .invoke()?;
+
+            Ok(())
+        }
+
+        // === PRIVATE ===
+        fn airdrop_has_not_started(&self) -> Result<()> {
+            let block_timestamp: Timestamp = Self::env().block_timestamp();
+            if block_timestamp > self.start {
+                return Err(AzAirdropError::UnprocessableEntity(
+                    "Airdrop has started".to_string(),
+                ));
+            }
+
+            Ok(())
         }
     }
 
