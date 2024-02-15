@@ -31,11 +31,11 @@ mod az_airdrop {
         total_amount: Balance,
         collected: Balance,
         // % of total_amount
-        default_collectable_at_tge: Option<u8>,
+        collectable_at_tge: Option<u8>,
         // ms from start user has to wait before either starting vesting, or collecting remaining available.
-        default_cliff: Option<Timestamp>,
+        cliff: Option<Timestamp>,
         // ms to collect all remaining after collection at tge
-        default_vesting: Option<Timestamp>,
+        vesting: Option<Timestamp>,
     }
 
     // === CONTRACT ===
