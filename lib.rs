@@ -1,8 +1,15 @@
 #![cfg_attr(not(feature = "std"), no_std, no_main)]
 
+mod errors;
+
 #[ink::contract]
 mod az_airdrop {
-    use ink::storage::Mapping;
+    use crate::errors::AzAirdropError;
+    use ink::{prelude::string::ToString, reflect::ContractEventBase, storage::Mapping};
+
+    // === TYPES ===
+    type Event = <AzAirdrop as ContractEventBase>::Type;
+    type Result<T> = core::result::Result<T, AzAirdropError>;
 
     // === STRUCTS ===
     #[derive(Debug, Clone, scale::Encode, scale::Decode)]
@@ -69,6 +76,13 @@ mod az_airdrop {
                 default_cliff: self.default_cliff,
                 default_vesting: self.default_vesting,
             }
+        }
+
+        #[ink(message)]
+        pub fn show(&self, address: AccountId) -> Result<Recipient> {
+            self.recipients
+                .get(address)
+                .ok_or(AzAirdropError::NotFound("Recipient".to_string()))
         }
     }
 
