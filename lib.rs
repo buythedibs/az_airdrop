@@ -165,6 +165,31 @@ mod az_airdrop {
         }
 
         #[ink(message)]
+        pub fn subtract_from_recipient(
+            &mut self,
+            address: AccountId,
+            amount: Balance,
+        ) -> Result<Recipient> {
+            self.authorise_to_update_recipient()?;
+            self.airdrop_has_not_started()?;
+            let mut recipient = self.show(address)?;
+            if amount > recipient.total_amount {
+                return Err(AzAirdropError::UnprocessableEntity(
+                    "Amount is greater than recipient's total amount".to_string(),
+                ));
+            }
+
+            // Update recipient
+            recipient.total_amount -= amount;
+            self.recipients.insert(address, &recipient);
+
+            // Update config
+            self.amount_set_for_drop -= amount;
+
+            Ok(recipient)
+        }
+
+        #[ink(message)]
         pub fn sub_admins_add(&mut self, address: AccountId) -> Result<Vec<AccountId>> {
             let caller: AccountId = Self::env().caller();
             Self::authorise(caller, self.admin)?;
@@ -409,6 +434,70 @@ mod az_airdrop {
         }
 
         #[ink::test]
+        fn test_subtract_from_recipient() {
+            let (accounts, mut az_airdrop) = init();
+            let amount: Balance = 5;
+            let recipient_address: AccountId = accounts.django;
+            // when called by an admin or sub-admin
+            // = when airdrop has started
+            ink::env::test::set_block_timestamp::<ink::env::DefaultEnvironment>(az_airdrop.start);
+            // = * it raises an error
+            let mut result = az_airdrop.subtract_from_recipient(recipient_address, amount);
+            assert_eq!(
+                result,
+                Err(AzAirdropError::UnprocessableEntity(
+                    "Airdrop has started".to_string(),
+                ))
+            );
+            // = when airdrop has not started
+            ink::env::test::set_block_timestamp::<ink::env::DefaultEnvironment>(
+                az_airdrop.start - 1,
+            );
+            // == when recipient does not exist
+            // == * it raises an error
+            result = az_airdrop.subtract_from_recipient(recipient_address, amount);
+            assert_eq!(
+                result,
+                Err(AzAirdropError::NotFound("Recipient".to_string()))
+            );
+            // == when recipient exists
+            az_airdrop.recipients.insert(
+                recipient_address,
+                &Recipient {
+                    total_amount: amount,
+                    collected: 0,
+                    collectable_at_tge: 0,
+                    cliff: 0,
+                    vesting: 0,
+                },
+            );
+            // === when amount is greater than the recipient's total amount
+            // === * it returns an error
+            result = az_airdrop.subtract_from_recipient(recipient_address, amount + 1);
+            assert_eq!(
+                result,
+                Err(AzAirdropError::UnprocessableEntity(
+                    "Amount is greater than recipient's total amount".to_string()
+                ))
+            );
+            // === when amount is less than or equal to the recipient's total amount
+            az_airdrop.amount_set_for_drop += amount;
+            // === * it reduces the total_amount by the amount
+            az_airdrop
+                .subtract_from_recipient(recipient_address, amount - 1)
+                .unwrap();
+            let recipient: Recipient = az_airdrop.recipients.get(recipient_address).unwrap();
+            assert_eq!(recipient.total_amount, 1);
+            // when called by non-admin or non-sub-admin
+            set_caller::<DefaultEnvironment>(accounts.charlie);
+            // * it raises an error
+            result = az_airdrop.subtract_from_recipient(recipient_address, amount);
+            assert_eq!(result, Err(AzAirdropError::Unauthorised));
+            // === * it reduces the total_amount
+            assert_eq!(az_airdrop.amount_set_for_drop, 1);
+        }
+
+        #[ink::test]
         fn test_update_recipient() {
             let (accounts, mut az_airdrop) = init();
             let recipient: AccountId = accounts.django;
@@ -446,7 +535,9 @@ mod az_airdrop {
                 },
             );
             // == * it updates the provided fields
-            result = az_airdrop.update_recipient(recipient, Some(5), Some(5), Some(5));
+            az_airdrop
+                .update_recipient(recipient, Some(5), Some(5), Some(5))
+                .unwrap();
             let updated_recipient: Recipient = az_airdrop.recipients.get(recipient).unwrap();
             assert_eq!(
                 updated_recipient,
