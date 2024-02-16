@@ -7,6 +7,10 @@
 * [Cargo](https://doc.rust-lang.org/cargo/)
 * [Rust](https://www.rust-lang.org/)
 * [ink!](https://use.ink/)
+* [Cargo Contract v3.2.0](https://github.com/paritytech/cargo-contract)
+```zsh
+cargo install --force --locked cargo-contract --version 3.2.0
+```
 
 ### Checking code
 
