@@ -49,7 +49,7 @@ mod az_airdrop {
     #[ink(storage)]
     pub struct AzAirdrop {
         admin: AccountId,
-        sub_admin_mapping: Mapping<AccountId, AccountId>,
+        sub_admins_mapping: Mapping<AccountId, AccountId>,
         sub_admins_as_vec: Lazy<Vec<AccountId>>,
         token: AccountId,
         start: Timestamp,
@@ -70,7 +70,7 @@ mod az_airdrop {
             Self {
                 token,
                 admin: Self::env().caller(),
-                sub_admin_mapping: Mapping::default(),
+                sub_admins_mapping: Mapping::default(),
                 sub_admins_as_vec: Default::default(),
                 start,
                 recipients: Mapping::default(),
@@ -121,16 +121,18 @@ mod az_airdrop {
 
         #[ink(message)]
         pub fn sub_admins_add(&mut self, addresses: Vec<AccountId>) -> Result<Vec<AccountId>> {
-            self.airdrop_has_not_started()?;
+            let caller: AccountId = Self::env().caller();
+            Self::authorise(caller, self.admin)?;
+
             let mut sub_admins: Vec<AccountId> = self.sub_admins_as_vec.get_or_default();
             for address in &addresses {
-                if self.recipients.get(address).is_some() {
+                if self.sub_admins_mapping.get(address).is_some() {
                     return Err(AzAirdropError::UnprocessableEntity(
                         "Already a sub admin".to_string(),
                     ));
                 } else {
                     sub_admins.push(address.clone());
-                    self.sub_admin_mapping.insert(address, &address.clone());
+                    self.sub_admins_mapping.insert(address, &address.clone());
                 }
             }
             self.sub_admins_as_vec.set(&sub_admins);
@@ -145,6 +147,14 @@ mod az_airdrop {
                 return Err(AzAirdropError::UnprocessableEntity(
                     "Airdrop has started".to_string(),
                 ));
+            }
+
+            Ok(())
+        }
+
+        fn authorise(allowed: AccountId, received: AccountId) -> Result<()> {
+            if allowed != received {
+                return Err(AzAirdropError::Unauthorised);
             }
 
             Ok(())
@@ -191,6 +201,50 @@ mod az_airdrop {
             assert_eq!(config.default_collectable_at_tge, None);
             assert_eq!(config.default_cliff, None);
             assert_eq!(config.default_vesting, None);
+        }
+
+        // === TEST HANDLES ===
+        #[ink::test]
+        fn test_sub_admins_add() {
+            let (accounts, mut az_airdrop) = init();
+            let mut new_sub_admins: Vec<AccountId> = Vec::new();
+            new_sub_admins.push(accounts.charlie);
+            new_sub_admins.push(accounts.django);
+            // when called by admin
+            // = when addresses are not sub admins
+            let mut result = az_airdrop.sub_admins_add(new_sub_admins.clone());
+            result.unwrap();
+            // = * it adds the addresses to sub_admins_vec
+            assert_eq!(
+                az_airdrop.sub_admins_as_vec.get_or_default(),
+                vec![accounts.charlie, accounts.django]
+            );
+            // = * it adds the addresses to sub_admins_mapping
+            assert_eq!(
+                az_airdrop
+                    .sub_admins_mapping
+                    .get(accounts.charlie)
+                    .is_some(),
+                true
+            );
+            assert_eq!(
+                az_airdrop.sub_admins_mapping.get(accounts.django).is_some(),
+                true
+            );
+            // = when addresses contain sub admins
+            result = az_airdrop.sub_admins_add(new_sub_admins.clone());
+            assert_eq!(
+                result,
+                Err(AzAirdropError::UnprocessableEntity(
+                    "Already a sub admin".to_string()
+                ))
+            );
+            // = * it raises an error
+            // when called by non admin
+            // * it raises an error
+            set_caller::<DefaultEnvironment>(accounts.charlie);
+            result = az_airdrop.sub_admins_add(new_sub_admins);
+            assert_eq!(result, Err(AzAirdropError::Unauthorised));
         }
     }
 }
