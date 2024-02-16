@@ -5,10 +5,12 @@ mod errors;
 #[ink::contract]
 mod az_airdrop {
     use crate::errors::AzAirdropError;
-    use ink::prelude::vec::Vec;
-    use ink::storage::Lazy;
     use ink::{
-        env::CallFlags, prelude::string::ToString, reflect::ContractEventBase, storage::Mapping,
+        env::CallFlags,
+        prelude::string::ToString,
+        prelude::{vec, vec::Vec},
+        reflect::ContractEventBase,
+        storage::{Lazy, Mapping},
     };
     use openbrush::contracts::psp22::PSP22Ref;
 
@@ -127,6 +129,7 @@ mod az_airdrop {
         }
 
         // This is for the sales smart contract to call
+        #[ink(message)]
         pub fn add_to_recipient(&mut self, address: AccountId, amount: Balance) -> Result<()> {
             self.authorise_to_update_recipient()?;
             self.airdrop_has_not_started()?;
@@ -365,6 +368,118 @@ mod az_airdrop {
             set_caller::<DefaultEnvironment>(accounts.charlie);
             result = az_airdrop.sub_admins_remove(sub_admin_to_remove);
             assert_eq!(result, Err(AzAirdropError::Unauthorised));
+        }
+    }
+
+    // The main purpose of the e2e tests are to test the interactions with az groups contract
+    #[cfg(all(test, feature = "e2e-tests"))]
+    mod e2e_tests {
+        use super::*;
+        use crate::az_airdrop::AzAirdropRef;
+        use az_button::ButtonRef;
+        use ink_e2e::build_message;
+        use ink_e2e::Keypair;
+        use openbrush::contracts::traits::psp22::psp22_external::PSP22;
+
+        // === CONSTANT ===
+        const MOCK_AMOUNT: Balance = 250;
+        const MOCK_START: Timestamp = 2708075722737;
+
+        // === TYPES ===
+        type E2EResult<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+        // === HELPERS ===
+        fn account_id(k: Keypair) -> AccountId {
+            AccountId::try_from(k.public_key().to_account_id().as_ref())
+                .expect("account keyring has a valid account id")
+        }
+
+        // === TEST HANDLES ===
+        // This is just to test when cheque has a token address associated with it
+        #[ink_e2e::test]
+        async fn test_add_to_recipient(mut client: ::ink_e2e::Client<C, E>) -> E2EResult<()> {
+            let bob_account_id: AccountId = account_id(ink_e2e::bob());
+
+            // Instantiate token
+            let token_constructor = ButtonRef::new(
+                MOCK_AMOUNT,
+                Some("Button".to_string()),
+                Some("BTN".to_string()),
+                6,
+            );
+            let token_id: AccountId = client
+                .instantiate("az_button", &ink_e2e::alice(), token_constructor, 0, None)
+                .await
+                .expect("Token instantiate failed")
+                .account_id;
+
+            // Instantiate airdrop smart contract
+            let airdrop_constructor =
+                AzAirdropRef::new(token_id, MOCK_START, Some(20), None, Some(31556952000));
+            let airdrop_id: AccountId = client
+                .instantiate(
+                    "az_airdrop",
+                    &ink_e2e::alice(),
+                    airdrop_constructor,
+                    0,
+                    None,
+                )
+                .await
+                .expect("Airdrop instantiate failed")
+                .account_id;
+
+            // when caller is authorised
+            // = when airdrop has not started
+            // == when smart contract does not have the balance to cover amount
+            // == * it raises an error
+            let add_to_recipient_message = build_message::<AzAirdropRef>(airdrop_id)
+                .call(|airdrop| airdrop.add_to_recipient(bob_account_id, 1));
+            let result = client
+                .call_dry_run(&ink_e2e::alice(), &add_to_recipient_message, 0, None)
+                .await
+                .return_value();
+            assert_eq!(
+                result,
+                Err(AzAirdropError::UnprocessableEntity(
+                    "Insufficient balance".to_string()
+                ))
+            );
+            // == when smart contract has the balance to cover amount
+            let transfer_message = build_message::<ButtonRef>(token_id)
+                .call(|button| button.transfer(airdrop_id, 1, vec![]));
+            let transfer_result = client
+                .call(&ink_e2e::alice(), transfer_message, 0, None)
+                .await
+                .unwrap()
+                .dry_run
+                .exec_result
+                .result;
+            assert!(transfer_result.is_ok());
+            // == * it adds to the recipient's total_amount
+            let add_to_recipient_message = build_message::<AzAirdropRef>(airdrop_id)
+                .call(|airdrop| airdrop.add_to_recipient(bob_account_id, 1));
+            client
+                .call(&ink_e2e::alice(), add_to_recipient_message, 0, None)
+                .await
+                .unwrap();
+            let show_message = build_message::<AzAirdropRef>(airdrop_id)
+                .call(|airdrop| airdrop.show(bob_account_id));
+            let recipient = client
+                .call_dry_run(&ink_e2e::alice(), &show_message, 0, None)
+                .await
+                .return_value()
+                .unwrap();
+            assert_eq!(recipient.total_amount, 1);
+            // == * it adds to the amount_set_for_drop
+            let config_message =
+                build_message::<AzAirdropRef>(airdrop_id).call(|airdrop| airdrop.config());
+            let config = client
+                .call_dry_run(&ink_e2e::alice(), &config_message, 0, None)
+                .await
+                .return_value();
+            assert_eq!(config.amount_set_for_drop, 1);
+
+            Ok(())
         }
     }
 }
