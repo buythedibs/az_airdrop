@@ -130,7 +130,14 @@ mod az_airdrop {
 
         // This is for the sales smart contract to call
         #[ink(message)]
-        pub fn add_to_recipient(&mut self, address: AccountId, amount: Balance) -> Result<()> {
+        pub fn add_to_recipient(
+            &mut self,
+            address: AccountId,
+            amount: Balance,
+            collectable_at_tge: Option<u8>,
+            cliff: Option<Timestamp>,
+            vesting: Option<Timestamp>,
+        ) -> Result<()> {
             self.authorise_to_update_recipient()?;
             self.airdrop_has_not_started()?;
             // Check that balance has enough to cover
@@ -146,13 +153,22 @@ mod az_airdrop {
                 recipient.total_amount += amount;
                 self.recipients.insert(address, &recipient);
             } else {
-                let recipient = Recipient {
+                let mut recipient = Recipient {
                     total_amount: amount,
                     collected: 0,
                     collectable_at_tge: self.default_collectable_at_tge,
                     cliff: self.default_cliff,
                     vesting: self.default_vesting,
                 };
+                if let Some(collectable_at_tge_unwrapped) = collectable_at_tge {
+                    recipient.collectable_at_tge = collectable_at_tge_unwrapped
+                }
+                if let Some(cliff_unwrapped) = cliff {
+                    recipient.cliff = cliff_unwrapped
+                }
+                if let Some(vesting_unwrapped) = vesting {
+                    recipient.vesting = vesting_unwrapped
+                }
                 self.recipients.insert(address, &recipient);
             }
             self.amount_set_for_drop += amount;
@@ -280,7 +296,8 @@ mod az_airdrop {
             // when caller is not authorised
             set_caller::<DefaultEnvironment>(accounts.charlie);
             // * it raises an error
-            let mut result = az_airdrop.add_to_recipient(accounts.charlie, amount);
+            let mut result =
+                az_airdrop.add_to_recipient(accounts.charlie, amount, None, None, None);
             assert_eq!(result, Err(AzAirdropError::Unauthorised));
             // when caller is authorised
             set_caller::<DefaultEnvironment>(accounts.bob);
@@ -289,7 +306,7 @@ mod az_airdrop {
             // = when airdrop has started
             ink::env::test::set_block_timestamp::<ink::env::DefaultEnvironment>(az_airdrop.start);
             // = * it raises an error
-            result = az_airdrop.add_to_recipient(accounts.charlie, amount);
+            result = az_airdrop.add_to_recipient(accounts.charlie, amount, None, None, None);
             assert_eq!(
                 result,
                 Err(AzAirdropError::UnprocessableEntity(
@@ -414,7 +431,16 @@ mod az_airdrop {
                 .account_id;
 
             // Instantiate airdrop smart contract
-            let airdrop_constructor = AzAirdropRef::new(token_id, MOCK_START, 20, 0, 31556952000);
+            let default_collectable_at_tge: u8 = 20;
+            let default_cliff: Timestamp = 0;
+            let default_vesting: Timestamp = 31556952000;
+            let airdrop_constructor = AzAirdropRef::new(
+                token_id,
+                MOCK_START,
+                default_collectable_at_tge,
+                default_cliff,
+                default_vesting,
+            );
             let airdrop_id: AccountId = client
                 .instantiate(
                     "az_airdrop",
@@ -432,7 +458,7 @@ mod az_airdrop {
             // == when smart contract does not have the balance to cover amount
             // == * it raises an error
             let add_to_recipient_message = build_message::<AzAirdropRef>(airdrop_id)
-                .call(|airdrop| airdrop.add_to_recipient(bob_account_id, 1));
+                .call(|airdrop| airdrop.add_to_recipient(bob_account_id, 1, None, None, None));
             let result = client
                 .call_dry_run(&ink_e2e::alice(), &add_to_recipient_message, 0, None)
                 .await
@@ -454,9 +480,9 @@ mod az_airdrop {
                 .exec_result
                 .result;
             assert!(transfer_result.is_ok());
-            // == * it adds to the recipient's total_amount
+            // == * it adds to the recipient's total_amount and sets details with defaults if not provided and new
             let add_to_recipient_message = build_message::<AzAirdropRef>(airdrop_id)
-                .call(|airdrop| airdrop.add_to_recipient(bob_account_id, 1));
+                .call(|airdrop| airdrop.add_to_recipient(bob_account_id, 1, None, None, None));
             client
                 .call(&ink_e2e::alice(), add_to_recipient_message, 0, None)
                 .await
@@ -469,6 +495,9 @@ mod az_airdrop {
                 .return_value()
                 .unwrap();
             assert_eq!(recipient.total_amount, 1);
+            assert_eq!(recipient.collectable_at_tge, default_collectable_at_tge);
+            assert_eq!(recipient.cliff, default_cliff);
+            assert_eq!(recipient.vesting, default_vesting);
             // == * it adds to the amount_set_for_drop
             let config_message =
                 build_message::<AzAirdropRef>(airdrop_id).call(|airdrop| airdrop.config());
