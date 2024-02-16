@@ -20,9 +20,10 @@ mod az_airdrop {
     #[derive(Debug, Clone, scale::Encode, scale::Decode)]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
     pub struct Config {
-        token: AccountId,
         admin: AccountId,
         sub_admins: Vec<AccountId>,
+        token: AccountId,
+        amount_set_for_drop: Balance,
         start: Timestamp,
         default_collectable_at_tge: Option<u8>,
         default_cliff: Option<Timestamp>,
@@ -52,6 +53,7 @@ mod az_airdrop {
         sub_admins_mapping: Mapping<AccountId, AccountId>,
         sub_admins_as_vec: Lazy<Vec<AccountId>>,
         token: AccountId,
+        amount_set_for_drop: Balance,
         start: Timestamp,
         recipients: Mapping<AccountId, Recipient>,
         default_collectable_at_tge: Option<u8>,
@@ -68,10 +70,11 @@ mod az_airdrop {
             default_vesting: Option<Timestamp>,
         ) -> Self {
             Self {
-                token,
                 admin: Self::env().caller(),
                 sub_admins_mapping: Mapping::default(),
                 sub_admins_as_vec: Default::default(),
+                token,
+                amount_set_for_drop: 0,
                 start,
                 recipients: Mapping::default(),
                 default_collectable_at_tge,
@@ -84,9 +87,10 @@ mod az_airdrop {
         #[ink(message)]
         pub fn config(&self) -> Config {
             Config {
-                token: self.token,
                 admin: self.admin,
                 sub_admins: self.sub_admins_as_vec.get_or_default(),
+                token: self.token,
+                amount_set_for_drop: self.amount_set_for_drop,
                 start: self.start,
                 default_collectable_at_tge: self.default_collectable_at_tge,
                 default_cliff: self.default_cliff,
@@ -105,7 +109,10 @@ mod az_airdrop {
         // Not a must, but good to have function
         #[ink(message)]
         pub fn acquire_token(&self, amount: Balance, from: AccountId) -> Result<()> {
+            let caller: AccountId = Self::env().caller();
+            Self::authorise(caller, self.admin)?;
             self.airdrop_has_not_started()?;
+
             PSP22Ref::transfer_from_builder(
                 &self.token,
                 from,
@@ -115,6 +122,37 @@ mod az_airdrop {
             )
             .call_flags(CallFlags::default())
             .invoke()?;
+
+            Ok(())
+        }
+
+        // This is for the sales smart contract to call
+        pub fn add_to_recipient(&mut self, address: AccountId, amount: Balance) -> Result<()> {
+            self.authorise_to_update_recipient()?;
+            self.airdrop_has_not_started()?;
+            // Check that balance has enough to cover
+            let smart_contract_balance: Balance =
+                PSP22Ref::balance_of(&self.token, Self::env().account_id());
+            if amount + self.amount_set_for_drop > smart_contract_balance {
+                return Err(AzAirdropError::UnprocessableEntity(
+                    "Insufficient balance".to_string(),
+                ));
+            }
+
+            if let Some(mut recipient) = self.recipients.get(address) {
+                recipient.total_amount += amount;
+                self.recipients.insert(address, &recipient);
+            } else {
+                let recipient = Recipient {
+                    total_amount: amount,
+                    collected: 0,
+                    collectable_at_tge: self.default_collectable_at_tge,
+                    cliff: self.default_cliff,
+                    vesting: self.default_vesting,
+                };
+                self.recipients.insert(address, &recipient);
+            }
+            self.amount_set_for_drop += amount;
 
             Ok(())
         }
@@ -161,7 +199,7 @@ mod az_airdrop {
         // === PRIVATE ===
         fn airdrop_has_not_started(&self) -> Result<()> {
             let block_timestamp: Timestamp = Self::env().block_timestamp();
-            if block_timestamp > self.start {
+            if block_timestamp >= self.start {
                 return Err(AzAirdropError::UnprocessableEntity(
                     "Airdrop has started".to_string(),
                 ));
@@ -176,6 +214,15 @@ mod az_airdrop {
             }
 
             Ok(())
+        }
+
+        fn authorise_to_update_recipient(&self) -> Result<()> {
+            let caller: AccountId = Self::env().caller();
+            if caller == self.admin || self.sub_admins_mapping.get(caller).is_some() {
+                Ok(())
+            } else {
+                return Err(AzAirdropError::Unauthorised);
+            }
         }
     }
 
@@ -222,6 +269,35 @@ mod az_airdrop {
         }
 
         // === TEST HANDLES ===
+        #[ink::test]
+        fn test_add_to_recipient() {
+            let (accounts, mut az_airdrop) = init();
+            let amount: Balance = 5;
+
+            // when caller is not authorised
+            set_caller::<DefaultEnvironment>(accounts.charlie);
+            // * it raises an error
+            let mut result = az_airdrop.add_to_recipient(accounts.charlie, amount);
+            assert_eq!(result, Err(AzAirdropError::Unauthorised));
+            // when caller is authorised
+            set_caller::<DefaultEnvironment>(accounts.bob);
+            az_airdrop.sub_admins_add(accounts.charlie).unwrap();
+            set_caller::<DefaultEnvironment>(accounts.charlie);
+            // = when airdrop has started
+            ink::env::test::set_block_timestamp::<ink::env::DefaultEnvironment>(az_airdrop.start);
+            // = * it raises an error
+            result = az_airdrop.add_to_recipient(accounts.charlie, amount);
+            assert_eq!(
+                result,
+                Err(AzAirdropError::UnprocessableEntity(
+                    "Airdrop has started".to_string(),
+                ))
+            );
+            // THE REST NEEDS TO BE IN INK E2E TESTS, SEE BELOW.
+            // = when airdrop has not started
+            // == when smart contract does not have the balance to cover amount
+        }
+
         #[ink::test]
         fn test_sub_admins_add() {
             let (accounts, mut az_airdrop) = init();
