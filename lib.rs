@@ -120,20 +120,38 @@ mod az_airdrop {
         }
 
         #[ink(message)]
-        pub fn sub_admins_add(&mut self, addresses: Vec<AccountId>) -> Result<Vec<AccountId>> {
+        pub fn sub_admins_add(&mut self, address: AccountId) -> Result<Vec<AccountId>> {
             let caller: AccountId = Self::env().caller();
             Self::authorise(caller, self.admin)?;
 
             let mut sub_admins: Vec<AccountId> = self.sub_admins_as_vec.get_or_default();
-            for address in &addresses {
-                if self.sub_admins_mapping.get(address).is_some() {
-                    return Err(AzAirdropError::UnprocessableEntity(
-                        "Already a sub admin".to_string(),
-                    ));
-                } else {
-                    sub_admins.push(address.clone());
-                    self.sub_admins_mapping.insert(address, &address.clone());
-                }
+            if self.sub_admins_mapping.get(address).is_some() {
+                return Err(AzAirdropError::UnprocessableEntity(
+                    "Already a sub admin".to_string(),
+                ));
+            } else {
+                sub_admins.push(address.clone());
+                self.sub_admins_mapping.insert(address, &address.clone());
+            }
+            self.sub_admins_as_vec.set(&sub_admins);
+
+            Ok(sub_admins)
+        }
+
+        #[ink(message)]
+        pub fn sub_admins_remove(&mut self, address: AccountId) -> Result<Vec<AccountId>> {
+            let caller: AccountId = Self::env().caller();
+            Self::authorise(caller, self.admin)?;
+
+            let mut sub_admins: Vec<AccountId> = self.sub_admins_as_vec.get_or_default();
+            if self.sub_admins_mapping.get(address).is_none() {
+                return Err(AzAirdropError::UnprocessableEntity(
+                    "Not a sub admin".to_string(),
+                ));
+            } else {
+                let index = sub_admins.iter().position(|x| *x == address).unwrap();
+                sub_admins.remove(index);
+                self.sub_admins_mapping.remove(address);
             }
             self.sub_admins_as_vec.set(&sub_admins);
 
@@ -207,32 +225,23 @@ mod az_airdrop {
         #[ink::test]
         fn test_sub_admins_add() {
             let (accounts, mut az_airdrop) = init();
-            let mut new_sub_admins: Vec<AccountId> = Vec::new();
-            new_sub_admins.push(accounts.charlie);
-            new_sub_admins.push(accounts.django);
+            let new_sub_admin: AccountId = accounts.django;
             // when called by admin
-            // = when addresses are not sub admins
-            let mut result = az_airdrop.sub_admins_add(new_sub_admins.clone());
+            // = when address is not a sub admin
+            let mut result = az_airdrop.sub_admins_add(new_sub_admin);
             result.unwrap();
-            // = * it adds the addresses to sub_admins_vec
+            // = * it adds the address to sub_admins_vec
             assert_eq!(
                 az_airdrop.sub_admins_as_vec.get_or_default(),
-                vec![accounts.charlie, accounts.django]
+                vec![accounts.django]
             );
-            // = * it adds the addresses to sub_admins_mapping
+            // = * it adds the address to sub_admins_mapping
             assert_eq!(
-                az_airdrop
-                    .sub_admins_mapping
-                    .get(accounts.charlie)
-                    .is_some(),
+                az_airdrop.sub_admins_mapping.get(new_sub_admin).is_some(),
                 true
             );
-            assert_eq!(
-                az_airdrop.sub_admins_mapping.get(accounts.django).is_some(),
-                true
-            );
-            // = when addresses contain sub admins
-            result = az_airdrop.sub_admins_add(new_sub_admins.clone());
+            // = when already a sub admin
+            result = az_airdrop.sub_admins_add(new_sub_admin);
             assert_eq!(
                 result,
                 Err(AzAirdropError::UnprocessableEntity(
@@ -243,7 +252,42 @@ mod az_airdrop {
             // when called by non admin
             // * it raises an error
             set_caller::<DefaultEnvironment>(accounts.charlie);
-            result = az_airdrop.sub_admins_add(new_sub_admins);
+            result = az_airdrop.sub_admins_add(new_sub_admin);
+            assert_eq!(result, Err(AzAirdropError::Unauthorised));
+        }
+
+        #[ink::test]
+        fn test_sub_admins_remove() {
+            let (accounts, mut az_airdrop) = init();
+            let sub_admin_to_remove: AccountId = accounts.django;
+            // when called by admin
+            // = when address is not a sub admin
+            let mut result = az_airdrop.sub_admins_remove(sub_admin_to_remove);
+            assert_eq!(
+                result,
+                Err(AzAirdropError::UnprocessableEntity(
+                    "Not a sub admin".to_string()
+                ))
+            );
+            // = when address is a sub admin
+            az_airdrop.sub_admins_add(sub_admin_to_remove).unwrap();
+            result = az_airdrop.sub_admins_remove(sub_admin_to_remove);
+            result.unwrap();
+            // = * it removes the address from sub_admins_vec
+            assert_eq!(az_airdrop.sub_admins_as_vec.get_or_default().len(), 0);
+            // = * it remove the address from sub_admins_mapping
+            assert_eq!(
+                az_airdrop
+                    .sub_admins_mapping
+                    .get(sub_admin_to_remove)
+                    .is_some(),
+                false
+            );
+            // = * it raises an error
+            // when called by non admin
+            // * it raises an error
+            set_caller::<DefaultEnvironment>(accounts.charlie);
+            result = az_airdrop.sub_admins_remove(sub_admin_to_remove);
             assert_eq!(result, Err(AzAirdropError::Unauthorised));
         }
     }
