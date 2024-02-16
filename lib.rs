@@ -27,9 +27,9 @@ mod az_airdrop {
         token: AccountId,
         amount_set_for_drop: Balance,
         start: Timestamp,
-        default_collectable_at_tge: Option<u8>,
-        default_cliff: Option<Timestamp>,
-        default_vesting: Option<Timestamp>,
+        default_collectable_at_tge: u8,
+        default_cliff: Timestamp,
+        default_vesting: Timestamp,
     }
 
     #[derive(scale::Decode, scale::Encode, Debug, Clone, PartialEq)]
@@ -41,11 +41,11 @@ mod az_airdrop {
         total_amount: Balance,
         collected: Balance,
         // % of total_amount
-        collectable_at_tge: Option<u8>,
+        collectable_at_tge: u8,
         // ms from start user has to wait before either starting vesting, or collecting remaining available.
-        cliff: Option<Timestamp>,
+        cliff: Timestamp,
         // ms to collect all remaining after collection at tge
-        vesting: Option<Timestamp>,
+        vesting: Timestamp,
     }
 
     // === CONTRACT ===
@@ -58,18 +58,18 @@ mod az_airdrop {
         amount_set_for_drop: Balance,
         start: Timestamp,
         recipients: Mapping<AccountId, Recipient>,
-        default_collectable_at_tge: Option<u8>,
-        default_cliff: Option<Timestamp>,
-        default_vesting: Option<Timestamp>,
+        default_collectable_at_tge: u8,
+        default_cliff: Timestamp,
+        default_vesting: Timestamp,
     }
     impl AzAirdrop {
         #[ink(constructor)]
         pub fn new(
             token: AccountId,
             start: Timestamp,
-            default_collectable_at_tge: Option<u8>,
-            default_cliff: Option<Timestamp>,
-            default_vesting: Option<Timestamp>,
+            default_collectable_at_tge: u8,
+            default_cliff: Timestamp,
+            default_vesting: Timestamp,
         ) -> Self {
             Self {
                 admin: Self::env().caller(),
@@ -243,7 +243,7 @@ mod az_airdrop {
         fn init() -> (DefaultAccounts<DefaultEnvironment>, AzAirdrop) {
             let accounts = default_accounts();
             set_caller::<DefaultEnvironment>(accounts.bob);
-            let az_airdrop = AzAirdrop::new(mock_token(), MOCK_START, None, None, None);
+            let az_airdrop = AzAirdrop::new(mock_token(), MOCK_START, 0, 0, 0);
             (accounts, az_airdrop)
         }
 
@@ -266,9 +266,9 @@ mod az_airdrop {
                 az_airdrop.sub_admins_as_vec.get_or_default()
             );
             assert_eq!(config.start, MOCK_START);
-            assert_eq!(config.default_collectable_at_tge, None);
-            assert_eq!(config.default_cliff, None);
-            assert_eq!(config.default_vesting, None);
+            assert_eq!(config.default_collectable_at_tge, 0);
+            assert_eq!(config.default_cliff, 0);
+            assert_eq!(config.default_vesting, 0);
         }
 
         // === TEST HANDLES ===
@@ -414,8 +414,7 @@ mod az_airdrop {
                 .account_id;
 
             // Instantiate airdrop smart contract
-            let airdrop_constructor =
-                AzAirdropRef::new(token_id, MOCK_START, Some(20), None, Some(31556952000));
+            let airdrop_constructor = AzAirdropRef::new(token_id, MOCK_START, 20, 0, 31556952000);
             let airdrop_id: AccountId = client
                 .instantiate(
                     "az_airdrop",
