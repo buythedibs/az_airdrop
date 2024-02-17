@@ -25,11 +25,11 @@ mod az_airdrop {
         admin: AccountId,
         sub_admins: Vec<AccountId>,
         token: AccountId,
-        amount_set_for_drop: Balance,
+        to_be_collected: Balance,
         start: Timestamp,
-        default_collectable_at_tge: u8,
-        default_cliff: Timestamp,
-        default_vesting: Timestamp,
+        default_collectable_at_tge_percentage: u8,
+        default_cliff_duration: Timestamp,
+        default_vesting_duration: Timestamp,
     }
 
     #[derive(scale::Decode, scale::Encode, Debug, Clone, PartialEq)]
@@ -41,11 +41,11 @@ mod az_airdrop {
         total_amount: Balance,
         collected: Balance,
         // % of total_amount
-        collectable_at_tge: u8,
+        collectable_at_tge_percentage: u8,
         // ms from start user has to wait before either starting vesting, or collecting remaining available.
-        cliff: Timestamp,
+        cliff_duration: Timestamp,
         // ms to collect all remaining after collection at tge
-        vesting: Timestamp,
+        vesting_duration: Timestamp,
     }
 
     // === CONTRACT ===
@@ -55,48 +55,81 @@ mod az_airdrop {
         sub_admins_mapping: Mapping<AccountId, AccountId>,
         sub_admins_as_vec: Lazy<Vec<AccountId>>,
         token: AccountId,
-        amount_set_for_drop: Balance,
+        to_be_collected: Balance,
         start: Timestamp,
         recipients: Mapping<AccountId, Recipient>,
-        default_collectable_at_tge: u8,
-        default_cliff: Timestamp,
-        default_vesting: Timestamp,
+        default_collectable_at_tge_percentage: u8,
+        default_cliff_duration: Timestamp,
+        default_vesting_duration: Timestamp,
     }
     impl AzAirdrop {
         #[ink(constructor)]
         pub fn new(
             token: AccountId,
             start: Timestamp,
-            default_collectable_at_tge: u8,
-            default_cliff: Timestamp,
-            default_vesting: Timestamp,
+            default_collectable_at_tge_percentage: u8,
+            default_cliff_duration: Timestamp,
+            default_vesting_duration: Timestamp,
         ) -> Self {
             Self {
                 admin: Self::env().caller(),
                 sub_admins_mapping: Mapping::default(),
                 sub_admins_as_vec: Default::default(),
                 token,
-                amount_set_for_drop: 0,
+                to_be_collected: 0,
                 start,
                 recipients: Mapping::default(),
-                default_collectable_at_tge,
-                default_cliff,
-                default_vesting,
+                default_collectable_at_tge_percentage,
+                default_cliff_duration,
+                default_vesting_duration,
             }
         }
 
         // === QUERIES ===
+        #[ink(message)]
+        pub fn collectable_amount(
+            &self,
+            address: AccountId,
+            timestamp: Timestamp,
+        ) -> Result<Balance> {
+            let recipient: Recipient = self.show(address)?;
+            let mut total_collectable_at_time: Balance = 0;
+            if timestamp > self.start {
+                // collectable at tge
+                let collectable_at_tge: Balance =
+                    Balance::from(recipient.collectable_at_tge_percentage) * recipient.total_amount
+                        / 100;
+                // cliff_duration
+                let timestamp_at_end_of_cliff: Timestamp = self.start + recipient.cliff_duration;
+                let mut vesting_collectable: Balance = 0;
+                if timestamp > timestamp_at_end_of_cliff {
+                    let vesting_time_reached: Timestamp = timestamp - timestamp_at_end_of_cliff;
+                    let collectable_during_vesting: Balance =
+                        recipient.total_amount - collectable_at_tge;
+                    vesting_collectable = Balance::from(vesting_time_reached)
+                        * collectable_during_vesting
+                        / Balance::from(recipient.vesting_duration)
+                }
+                total_collectable_at_time = collectable_at_tge + vesting_collectable;
+                if total_collectable_at_time > recipient.total_amount {
+                    total_collectable_at_time = recipient.total_amount
+                }
+            }
+
+            Ok(total_collectable_at_time - recipient.collected)
+        }
+
         #[ink(message)]
         pub fn config(&self) -> Config {
             Config {
                 admin: self.admin,
                 sub_admins: self.sub_admins_as_vec.get_or_default(),
                 token: self.token,
-                amount_set_for_drop: self.amount_set_for_drop,
+                to_be_collected: self.to_be_collected,
                 start: self.start,
-                default_collectable_at_tge: self.default_collectable_at_tge,
-                default_cliff: self.default_cliff,
-                default_vesting: self.default_vesting,
+                default_collectable_at_tge_percentage: self.default_collectable_at_tge_percentage,
+                default_cliff_duration: self.default_cliff_duration,
+                default_vesting_duration: self.default_vesting_duration,
             }
         }
 
@@ -134,16 +167,16 @@ mod az_airdrop {
             &mut self,
             address: AccountId,
             amount: Balance,
-            collectable_at_tge: Option<u8>,
-            cliff: Option<Timestamp>,
-            vesting: Option<Timestamp>,
+            collectable_at_tge_percentage: Option<u8>,
+            cliff_duration: Option<Timestamp>,
+            vesting_duration: Option<Timestamp>,
         ) -> Result<Recipient> {
             self.authorise_to_update_recipient()?;
             self.airdrop_has_not_started()?;
             // Check that balance has enough to cover
             let smart_contract_balance: Balance =
                 PSP22Ref::balance_of(&self.token, Self::env().account_id());
-            if amount + self.amount_set_for_drop > smart_contract_balance {
+            if amount + self.to_be_collected > smart_contract_balance {
                 return Err(AzAirdropError::UnprocessableEntity(
                     "Insufficient balance".to_string(),
                 ));
@@ -152,16 +185,48 @@ mod az_airdrop {
             let mut recipient: Recipient = self.recipients.get(address).unwrap_or(Recipient {
                 total_amount: 0,
                 collected: 0,
-                collectable_at_tge: self.default_collectable_at_tge,
-                cliff: self.default_cliff,
-                vesting: self.default_vesting,
+                collectable_at_tge_percentage: self.default_collectable_at_tge_percentage,
+                cliff_duration: self.default_cliff_duration,
+                vesting_duration: self.default_vesting_duration,
             });
             recipient.total_amount += amount;
             self.recipients.insert(address, &recipient);
-            self.update_recipient(address, collectable_at_tge, cliff, vesting)?;
-            self.amount_set_for_drop += amount;
+            self.update_recipient(
+                address,
+                collectable_at_tge_percentage,
+                cliff_duration,
+                vesting_duration,
+            )?;
+            self.to_be_collected += amount;
 
             Ok(recipient)
+        }
+
+        #[ink(message)]
+        pub fn collect(&mut self) -> Result<Balance> {
+            let caller: AccountId = Self::env().caller();
+            let mut recipient = self.show(caller)?;
+
+            let block_timestamp: Timestamp = Self::env().block_timestamp();
+            let collectable_amount: Balance = self.collectable_amount(caller, block_timestamp)?;
+            if collectable_amount == 0 {
+                return Err(AzAirdropError::UnprocessableEntity(
+                    "Amount is zero".to_string(),
+                ));
+            }
+
+            // transfer to caller
+            PSP22Ref::transfer_builder(&self.token, caller, collectable_amount, vec![])
+                .call_flags(CallFlags::default())
+                .invoke()?;
+            // increase recipient's collected
+            recipient.collected += collectable_amount;
+            self.recipients.insert(caller, &recipient);
+
+            // should we reduce amount committed to airdrop for returning tokens logic?
+            self.to_be_collected -= collectable_amount;
+
+            Ok(collectable_amount)
         }
 
         #[ink(message)]
@@ -184,7 +249,7 @@ mod az_airdrop {
             self.recipients.insert(address, &recipient);
 
             // Update config
-            self.amount_set_for_drop -= amount;
+            self.to_be_collected -= amount;
 
             Ok(recipient)
         }
@@ -232,28 +297,30 @@ mod az_airdrop {
         pub fn update_recipient(
             &mut self,
             address: AccountId,
-            collectable_at_tge: Option<u8>,
-            cliff: Option<Timestamp>,
-            vesting: Option<Timestamp>,
+            collectable_at_tge_percentage: Option<u8>,
+            cliff_duration: Option<Timestamp>,
+            vesting_duration: Option<Timestamp>,
         ) -> Result<Recipient> {
             self.authorise_to_update_recipient()?;
             self.airdrop_has_not_started()?;
             let mut recipient: Recipient = self.show(address)?;
 
-            if let Some(collectable_at_tge_unwrapped) = collectable_at_tge {
-                if collectable_at_tge_unwrapped > 100 {
+            if let Some(collectable_at_tge_percentage_unwrapped) = collectable_at_tge_percentage {
+                if collectable_at_tge_percentage_unwrapped > 100 {
                     return Err(AzAirdropError::UnprocessableEntity(
-                        "collectable_at_tge must be less than or equal to 100".to_string(),
+                        "collectable_at_tge_percentage must be less than or equal to 100"
+                            .to_string(),
                     ));
                 } else {
-                    recipient.collectable_at_tge = collectable_at_tge_unwrapped
+                    recipient.collectable_at_tge_percentage =
+                        collectable_at_tge_percentage_unwrapped
                 }
             }
-            if let Some(cliff_unwrapped) = cliff {
-                recipient.cliff = cliff_unwrapped
+            if let Some(cliff_duration_unwrapped) = cliff_duration {
+                recipient.cliff_duration = cliff_duration_unwrapped
             }
-            if let Some(vesting_unwrapped) = vesting {
-                recipient.vesting = vesting_unwrapped
+            if let Some(vesting_duration_unwrapped) = vesting_duration {
+                recipient.vesting_duration = vesting_duration_unwrapped
             }
 
             self.recipients.insert(address, &recipient);
@@ -328,9 +395,9 @@ mod az_airdrop {
                 az_airdrop.sub_admins_as_vec.get_or_default()
             );
             assert_eq!(config.start, MOCK_START);
-            assert_eq!(config.default_collectable_at_tge, 0);
-            assert_eq!(config.default_cliff, 0);
-            assert_eq!(config.default_vesting, 0);
+            assert_eq!(config.default_collectable_at_tge_percentage, 0);
+            assert_eq!(config.default_cliff_duration, 0);
+            assert_eq!(config.default_vesting_duration, 0);
         }
 
         // === TEST HANDLES ===
@@ -466,9 +533,9 @@ mod az_airdrop {
                 &Recipient {
                     total_amount: amount,
                     collected: 0,
-                    collectable_at_tge: 0,
-                    cliff: 0,
-                    vesting: 0,
+                    collectable_at_tge_percentage: 0,
+                    cliff_duration: 0,
+                    vesting_duration: 0,
                 },
             );
             // === when amount is greater than the recipient's total amount
@@ -481,7 +548,7 @@ mod az_airdrop {
                 ))
             );
             // === when amount is less than or equal to the recipient's total amount
-            az_airdrop.amount_set_for_drop += amount;
+            az_airdrop.to_be_collected += amount;
             // === * it reduces the total_amount by the amount
             az_airdrop
                 .subtract_from_recipient(recipient_address, amount - 1)
@@ -494,7 +561,7 @@ mod az_airdrop {
             result = az_airdrop.subtract_from_recipient(recipient_address, amount);
             assert_eq!(result, Err(AzAirdropError::Unauthorised));
             // === * it reduces the total_amount
-            assert_eq!(az_airdrop.amount_set_for_drop, 1);
+            assert_eq!(az_airdrop.to_be_collected, 1);
         }
 
         #[ink::test]
@@ -529,9 +596,9 @@ mod az_airdrop {
                 &Recipient {
                     total_amount: 5,
                     collected: 0,
-                    collectable_at_tge: 0,
-                    cliff: 0,
-                    vesting: 0,
+                    collectable_at_tge_percentage: 0,
+                    cliff_duration: 0,
+                    vesting_duration: 0,
                 },
             );
             // == * it updates the provided fields
@@ -544,9 +611,9 @@ mod az_airdrop {
                 Recipient {
                     total_amount: 5,
                     collected: 0,
-                    collectable_at_tge: 5,
-                    cliff: 5,
-                    vesting: 5
+                    collectable_at_tge_percentage: 5,
+                    cliff_duration: 5,
+                    vesting_duration: 5
                 }
             );
             // when called by non-admin or non-sub-admin
@@ -600,15 +667,15 @@ mod az_airdrop {
                 .account_id;
 
             // Instantiate airdrop smart contract
-            let default_collectable_at_tge: u8 = 20;
-            let default_cliff: Timestamp = 0;
-            let default_vesting: Timestamp = 31556952000;
+            let default_collectable_at_tge_percentage: u8 = 20;
+            let default_cliff_duration: Timestamp = 0;
+            let default_vesting_duration: Timestamp = 31556952000;
             let airdrop_constructor = AzAirdropRef::new(
                 token_id,
                 MOCK_START,
-                default_collectable_at_tge,
-                default_cliff,
-                default_vesting,
+                default_collectable_at_tge_percentage,
+                default_cliff_duration,
+                default_vesting_duration,
             );
             let airdrop_id: AccountId = client
                 .instantiate(
@@ -664,17 +731,20 @@ mod az_airdrop {
                 .return_value()
                 .unwrap();
             assert_eq!(recipient.total_amount, 1);
-            assert_eq!(recipient.collectable_at_tge, default_collectable_at_tge);
-            assert_eq!(recipient.cliff, default_cliff);
-            assert_eq!(recipient.vesting, default_vesting);
-            // == * it adds to the amount_set_for_drop
+            assert_eq!(
+                recipient.collectable_at_tge_percentage,
+                default_collectable_at_tge_percentage
+            );
+            assert_eq!(recipient.cliff_duration, default_cliff_duration);
+            assert_eq!(recipient.vesting_duration, default_vesting_duration);
+            // == * it adds to the to_be_collected
             let config_message =
                 build_message::<AzAirdropRef>(airdrop_id).call(|airdrop| airdrop.config());
             let config = client
                 .call_dry_run(&ink_e2e::alice(), &config_message, 0, None)
                 .await
                 .return_value();
-            assert_eq!(config.amount_set_for_drop, 1);
+            assert_eq!(config.to_be_collected, 1);
 
             Ok(())
         }
