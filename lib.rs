@@ -86,6 +86,9 @@ mod az_airdrop {
         }
 
         // === QUERIES ===
+        // 0 = start (collectable_at_tge)
+        // 1 = vesting_start = start + cliff_duration
+        // 2 = vesting_end = vesting_start + vesting_duration
         #[ink(message)]
         pub fn collectable_amount(
             &self,
@@ -94,23 +97,26 @@ mod az_airdrop {
         ) -> Result<Balance> {
             let recipient: Recipient = self.show(address)?;
             let mut total_collectable_at_time: Balance = 0;
-            if timestamp > self.start {
+            if timestamp >= self.start {
                 // collectable at tge
                 let collectable_at_tge: Balance =
                     Balance::from(recipient.collectable_at_tge_percentage) * recipient.total_amount
                         / 100;
-                // cliff_duration
-                let timestamp_at_end_of_cliff: Timestamp = self.start + recipient.cliff_duration;
-                let mut vesting_collectable: Balance = 0;
-                if timestamp > timestamp_at_end_of_cliff {
-                    let vesting_time_reached: Timestamp = timestamp - timestamp_at_end_of_cliff;
-                    let collectable_during_vesting: Balance =
-                        recipient.total_amount - collectable_at_tge;
-                    vesting_collectable = Balance::from(vesting_time_reached)
-                        * collectable_during_vesting
-                        / Balance::from(recipient.vesting_duration)
+                total_collectable_at_time = collectable_at_tge;
+                if recipient.vesting_duration > 0 {
+                    // cliff_duration
+                    let vesting_start: Timestamp = self.start + recipient.cliff_duration;
+                    let mut vesting_collectable: Balance = 0;
+                    if timestamp >= vesting_start {
+                        let vesting_time_reached: Timestamp = timestamp - vesting_start;
+                        let collectable_during_vesting: Balance =
+                            recipient.total_amount - collectable_at_tge;
+                        vesting_collectable = Balance::from(vesting_time_reached)
+                            * collectable_during_vesting
+                            / Balance::from(recipient.vesting_duration)
+                    }
+                    total_collectable_at_time = total_collectable_at_time + vesting_collectable;
                 }
-                total_collectable_at_time = collectable_at_tge + vesting_collectable;
                 if total_collectable_at_time > recipient.total_amount {
                     total_collectable_at_time = recipient.total_amount
                 }
@@ -392,6 +398,75 @@ mod az_airdrop {
 
         // === TESTS ===
         // === TEST QUERIES ===
+        #[ink::test]
+        fn test_collectable_amount() {
+            let (accounts, mut az_airdrop) = init();
+            let recipient_address: AccountId = accounts.django;
+            let mut recipient: Recipient = Recipient {
+                total_amount: 100,
+                collected: 0,
+                collectable_at_tge_percentage: 100,
+                cliff_duration: 0,
+                vesting_duration: 0,
+            };
+            // when recipient does not exist
+            // * it returns an error
+            let mut result = az_airdrop.collectable_amount(recipient_address, 0);
+            assert_eq!(
+                result,
+                Err(AzAirdropError::NotFound("Recipient".to_string(),))
+            );
+            // when recipient exists
+            az_airdrop.recipients.insert(recipient_address, &recipient);
+            // = when provided timestamp is before the start time
+            // = * it returns zero
+            result = az_airdrop.collectable_amount(recipient_address, MOCK_START - 1);
+            let mut result_unwrapped: Balance = result.unwrap();
+            assert_eq!(result_unwrapped, 0);
+            // = when provided timestamp is greater than or equal to start time
+            // == when collectable_at_tge_percentage is positive
+            // === when collectable_at_tge_percentagne is 100
+            // === * it returns the total_amount
+            result = az_airdrop.collectable_amount(recipient_address, MOCK_START);
+            result_unwrapped = result.unwrap();
+            assert_eq!(result_unwrapped, recipient.total_amount);
+            // === when collectable_at_tge_percentage is 20
+            // ==== when vesting time has not been reached
+            // ==== * it returns 20
+            recipient = az_airdrop
+                .update_recipient(recipient_address, Some(20), Some(1), Some(100))
+                .unwrap();
+            result = az_airdrop.collectable_amount(recipient_address, MOCK_START);
+            result_unwrapped = result.unwrap();
+            assert_eq!(result_unwrapped, 20);
+            result = az_airdrop.collectable_amount(recipient_address, MOCK_START + 1);
+            result_unwrapped = result.unwrap();
+            assert_eq!(result_unwrapped, 20);
+            // ==== when partial vesting time has been reached
+            result = az_airdrop
+                .collectable_amount(recipient_address, MOCK_START + recipient.cliff_duration + 2);
+            // ==== * it returns the partial amount
+            result_unwrapped = result.unwrap();
+            assert_eq!(result_unwrapped, 20 + (2 * 80 / 100));
+            // ==== when total vesting time has been reached
+            result = az_airdrop.collectable_amount(
+                recipient_address,
+                MOCK_START + recipient.cliff_duration + recipient.vesting_duration * 1_000_000,
+            );
+            // ==== * it returns the total amount
+            result_unwrapped = result.unwrap();
+            assert_eq!(result_unwrapped, recipient.total_amount);
+            // ==== * it factors in recipient.collected
+            recipient.collected = 20;
+            az_airdrop.recipients.insert(recipient_address, &recipient);
+            result = az_airdrop.collectable_amount(
+                recipient_address,
+                MOCK_START + recipient.cliff_duration + recipient.vesting_duration,
+            );
+            result_unwrapped = result.unwrap();
+            assert_eq!(result_unwrapped, recipient.total_amount - 20);
+        }
+
         #[ink::test]
         fn test_config() {
             let (accounts, az_airdrop) = init();
