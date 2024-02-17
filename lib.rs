@@ -215,6 +215,39 @@ mod az_airdrop {
             Ok(sub_admins)
         }
 
+        #[ink(message)]
+        pub fn update_recipient(
+            &mut self,
+            address: AccountId,
+            collectable_at_tge: Option<u8>,
+            cliff: Option<Timestamp>,
+            vesting: Option<Timestamp>,
+        ) -> Result<Recipient> {
+            self.authorise_to_update_recipient()?;
+            self.airdrop_has_not_started()?;
+            let mut recipient: Recipient = self.show(address)?;
+
+            if let Some(collectable_at_tge_unwrapped) = collectable_at_tge {
+                if collectable_at_tge_unwrapped > 100 {
+                    return Err(AzAirdropError::UnprocessableEntity(
+                        "collectable_at_tge must be less than or equal to 100".to_string(),
+                    ));
+                } else {
+                    recipient.collectable_at_tge = collectable_at_tge_unwrapped
+                }
+            }
+            if let Some(cliff_unwrapped) = cliff {
+                recipient.cliff = cliff_unwrapped
+            }
+            if let Some(vesting_unwrapped) = vesting {
+                recipient.vesting = vesting_unwrapped
+            }
+
+            self.recipients.insert(address, &recipient);
+
+            Ok(recipient)
+        }
+
         // === PRIVATE ===
         fn airdrop_has_not_started(&self) -> Result<()> {
             let block_timestamp: Timestamp = Self::env().block_timestamp();
@@ -384,6 +417,63 @@ mod az_airdrop {
             // * it raises an error
             set_caller::<DefaultEnvironment>(accounts.charlie);
             result = az_airdrop.sub_admins_remove(sub_admin_to_remove);
+            assert_eq!(result, Err(AzAirdropError::Unauthorised));
+        }
+
+        #[ink::test]
+        fn test_update_recipient() {
+            let (accounts, mut az_airdrop) = init();
+            let recipient: AccountId = accounts.django;
+            // when called by an admin or sub-admin
+            // = when airdrop has started
+            ink::env::test::set_block_timestamp::<ink::env::DefaultEnvironment>(az_airdrop.start);
+            // = * it raises an error
+            let mut result = az_airdrop.update_recipient(recipient, None, None, None);
+            assert_eq!(
+                result,
+                Err(AzAirdropError::UnprocessableEntity(
+                    "Airdrop has started".to_string(),
+                ))
+            );
+            // = when airdrop has not started
+            ink::env::test::set_block_timestamp::<ink::env::DefaultEnvironment>(
+                az_airdrop.start - 1,
+            );
+            // == when recipient does not exist
+            // == * it raises an error
+            result = az_airdrop.update_recipient(recipient, None, None, None);
+            assert_eq!(
+                result,
+                Err(AzAirdropError::NotFound("Recipient".to_string(),))
+            );
+            // == when recipient exists
+            az_airdrop.recipients.insert(
+                recipient,
+                &Recipient {
+                    total_amount: 5,
+                    collected: 0,
+                    collectable_at_tge: 0,
+                    cliff: 0,
+                    vesting: 0,
+                },
+            );
+            // == * it updates the provided fields
+            result = az_airdrop.update_recipient(recipient, Some(5), Some(5), Some(5));
+            let updated_recipient: Recipient = az_airdrop.recipients.get(recipient).unwrap();
+            assert_eq!(
+                updated_recipient,
+                Recipient {
+                    total_amount: 5,
+                    collected: 0,
+                    collectable_at_tge: 5,
+                    cliff: 5,
+                    vesting: 5
+                }
+            );
+            // when called by non-admin or non-sub-admin
+            set_caller::<DefaultEnvironment>(accounts.charlie);
+            // * it raises an error
+            result = az_airdrop.update_recipient(recipient, None, None, None);
             assert_eq!(result, Err(AzAirdropError::Unauthorised));
         }
     }
