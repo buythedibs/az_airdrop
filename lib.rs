@@ -137,7 +137,7 @@ mod az_airdrop {
             collectable_at_tge: Option<u8>,
             cliff: Option<Timestamp>,
             vesting: Option<Timestamp>,
-        ) -> Result<()> {
+        ) -> Result<Recipient> {
             self.authorise_to_update_recipient()?;
             self.airdrop_has_not_started()?;
             // Check that balance has enough to cover
@@ -149,31 +149,19 @@ mod az_airdrop {
                 ));
             }
 
-            if let Some(mut recipient) = self.recipients.get(address) {
-                recipient.total_amount += amount;
-                self.recipients.insert(address, &recipient);
-            } else {
-                let mut recipient = Recipient {
-                    total_amount: amount,
-                    collected: 0,
-                    collectable_at_tge: self.default_collectable_at_tge,
-                    cliff: self.default_cliff,
-                    vesting: self.default_vesting,
-                };
-                if let Some(collectable_at_tge_unwrapped) = collectable_at_tge {
-                    recipient.collectable_at_tge = collectable_at_tge_unwrapped
-                }
-                if let Some(cliff_unwrapped) = cliff {
-                    recipient.cliff = cliff_unwrapped
-                }
-                if let Some(vesting_unwrapped) = vesting {
-                    recipient.vesting = vesting_unwrapped
-                }
-                self.recipients.insert(address, &recipient);
-            }
+            let mut recipient: Recipient = self.recipients.get(address).unwrap_or(Recipient {
+                total_amount: 0,
+                collected: 0,
+                collectable_at_tge: self.default_collectable_at_tge,
+                cliff: self.default_cliff,
+                vesting: self.default_vesting,
+            });
+            recipient.total_amount += amount;
+            self.recipients.insert(address, &recipient);
+            self.update_recipient(address, collectable_at_tge, cliff, vesting)?;
             self.amount_set_for_drop += amount;
 
-            Ok(())
+            Ok(recipient)
         }
 
         #[ink(message)]
