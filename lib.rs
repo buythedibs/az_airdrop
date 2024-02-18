@@ -516,6 +516,43 @@ mod az_airdrop {
         }
 
         #[ink::test]
+        fn test_collect() {
+            let (accounts, mut az_airdrop) = init();
+            // when recipient with caller's address does not exist
+            // * it raises an error
+            let mut result = az_airdrop.collect();
+            assert_eq!(
+                result,
+                Err(AzAirdropError::NotFound("Recipient".to_string()))
+            );
+            // when recipient with caller's address exists
+            az_airdrop.recipients.insert(
+                accounts.bob,
+                &Recipient {
+                    total_amount: 5,
+                    collected: 0,
+                    collectable_at_tge_percentage: 100,
+                    cliff_duration: 0,
+                    vesting_duration: 0,
+                },
+            );
+            // = when collectable amount is zero
+            ink::env::test::set_block_timestamp::<ink::env::DefaultEnvironment>(
+                az_airdrop.start - 1,
+            );
+            // = * it raises an error
+            result = az_airdrop.collect();
+            assert_eq!(
+                result,
+                Err(AzAirdropError::UnprocessableEntity(
+                    "Amount is zero".to_string(),
+                ))
+            );
+            // = when collectable amount is positive
+            // THE REST NEEDS TO HAPPEN IN INTEGRATION TESTS
+        }
+
+        #[ink::test]
         fn test_sub_admins_add() {
             let (accounts, mut az_airdrop) = init();
             let new_sub_admin: AccountId = accounts.django;
