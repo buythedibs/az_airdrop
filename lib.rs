@@ -306,21 +306,30 @@ mod az_airdrop {
             let mut recipient: Recipient = self.show(address)?;
 
             if let Some(collectable_at_tge_percentage_unwrapped) = collectable_at_tge_percentage {
-                if collectable_at_tge_percentage_unwrapped > 100 {
-                    return Err(AzAirdropError::UnprocessableEntity(
-                        "collectable_at_tge_percentage must be less than or equal to 100"
-                            .to_string(),
-                    ));
-                } else {
-                    recipient.collectable_at_tge_percentage =
-                        collectable_at_tge_percentage_unwrapped
-                }
+                recipient.collectable_at_tge_percentage = collectable_at_tge_percentage_unwrapped
             }
             if let Some(cliff_duration_unwrapped) = cliff_duration {
                 recipient.cliff_duration = cliff_duration_unwrapped
             }
             if let Some(vesting_duration_unwrapped) = vesting_duration {
                 recipient.vesting_duration = vesting_duration_unwrapped
+            }
+            if recipient.collectable_at_tge_percentage > 100 {
+                return Err(AzAirdropError::UnprocessableEntity(
+                    "collectable_at_tge_percentage must be less than or equal to 100".to_string(),
+                ));
+            } else if recipient.collectable_at_tge_percentage == 100 {
+                if recipient.cliff_duration > 0 || recipient.vesting_duration > 0 {
+                    return Err(AzAirdropError::UnprocessableEntity(
+                        "cliff_duration and vesting_duration must be 0 when collectable_tge_percentage is 100"
+                            .to_string(),
+                    ));
+                }
+            } else if recipient.vesting_duration == 0 {
+                return Err(AzAirdropError::UnprocessableEntity(
+                    "vesting_duration must be greater than 0 when collectable_tge_percentage is not 100"
+                        .to_string(),
+                ));
             }
 
             self.recipients.insert(address, &recipient);
@@ -616,6 +625,43 @@ mod az_airdrop {
                     vesting_duration: 5
                 }
             );
+            // === when recipient's collectable_at_tge_percentage is greater than 100
+            // === * it raises an error
+            result = az_airdrop.update_recipient(recipient, Some(101), None, None);
+            assert_eq!(
+                result,
+                Err(AzAirdropError::UnprocessableEntity(
+                    "collectable_at_tge_percentage must be less than or equal to 100".to_string()
+                ))
+            );
+            // === when recipient's collectable_at_tge_percentage is 100
+            // ==== when cliff_duration or vesting_duration is positive
+            // ==== * it raises an error
+            result = az_airdrop.update_recipient(recipient, Some(100), Some(1), Some(0));
+            assert_eq!(
+                result,
+                Err(AzAirdropError::UnprocessableEntity(
+                    "cliff_duration and vesting_duration must be 0 when collectable_tge_percentage is 100".to_string()
+                ))
+            );
+            result = az_airdrop.update_recipient(recipient, Some(100), Some(0), Some(1));
+            assert_eq!(
+                result,
+                Err(AzAirdropError::UnprocessableEntity(
+                    "cliff_duration and vesting_duration must be 0 when collectable_tge_percentage is 100".to_string()
+                ))
+            );
+            // === when recipient's collectable_at_tge_percentage is less than 100
+            // ==== when vesting_duration is zero
+            // ==== * it raises an error
+            result = az_airdrop.update_recipient(recipient, Some(0), None, Some(0));
+            assert_eq!(
+                result,
+                Err(AzAirdropError::UnprocessableEntity(
+                    "vesting_duration must be greater than 0 when collectable_tge_percentage is not 100".to_string()
+                ))
+            );
+
             // when called by non-admin or non-sub-admin
             set_caller::<DefaultEnvironment>(accounts.charlie);
             // * it raises an error
