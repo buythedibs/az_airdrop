@@ -70,8 +70,14 @@ mod az_airdrop {
             default_collectable_at_tge_percentage: u8,
             default_cliff_duration: Timestamp,
             default_vesting_duration: Timestamp,
-        ) -> Self {
-            Self {
+        ) -> Result<Self> {
+            Self::validate_airdrop_calculation_variables(
+                default_collectable_at_tge_percentage,
+                default_cliff_duration,
+                default_vesting_duration,
+            )?;
+
+            Ok(Self {
                 admin: Self::env().caller(),
                 sub_admins_mapping: Mapping::default(),
                 sub_admins_as_vec: Default::default(),
@@ -82,7 +88,7 @@ mod az_airdrop {
                 default_collectable_at_tge_percentage,
                 default_cliff_duration,
                 default_vesting_duration,
-            }
+            })
         }
 
         // === QUERIES ===
@@ -290,6 +296,72 @@ mod az_airdrop {
             Ok(sub_admins)
         }
 
+        // #[derive(Debug, Clone, scale::Encode, scale::Decode)]
+        // #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+        // pub struct Config {
+        //     admin: AccountId,
+        //     sub_admins: Vec<AccountId>,
+        //     token: AccountId,
+        //     to_be_collected: Balance,
+        //     start: Timestamp,
+        //     default_collectable_at_tge_percentage: u8,
+        //     default_cliff_duration: Timestamp,
+        //     default_vesting_duration: Timestamp,
+        // }
+        #[ink(message)]
+        pub fn update_config(
+            &mut self,
+            admin: Option<AccountId>,
+            start: Option<Timestamp>,
+            default_collectable_at_tge_percentage: Option<u8>,
+            default_cliff_duration: Option<Timestamp>,
+            default_vesting_duration: Option<Timestamp>,
+        ) -> Result<()> {
+            let caller: AccountId = Self::env().caller();
+            Self::authorise(caller, self.admin)?;
+
+            if let Some(admin_unwrapped) = admin {
+                self.admin = admin_unwrapped
+            }
+            if let Some(start_unwrapped) = start {
+                let block_timestamp: Timestamp = Self::env().block_timestamp();
+                if start_unwrapped > block_timestamp {
+                    if self.to_be_collected == 0 {
+                        self.start = start_unwrapped
+                    } else {
+                        return Err(AzAirdropError::UnprocessableEntity(
+                            "to_be_collected must be zero when changing start time".to_string(),
+                        ));
+                    }
+                } else {
+                    return Err(AzAirdropError::UnprocessableEntity(
+                        "New start time must be in the future".to_string(),
+                    ));
+                }
+            }
+            if let Some(default_collectable_at_tge_percentage_unwrapped) =
+                default_collectable_at_tge_percentage
+            {
+                self.default_collectable_at_tge_percentage =
+                    default_collectable_at_tge_percentage_unwrapped
+            }
+            if let Some(default_cliff_duration_unwrapped) = default_cliff_duration {
+                self.default_cliff_duration = default_cliff_duration_unwrapped
+            }
+            if let Some(default_vesting_duration_unwrapped) = default_vesting_duration {
+                self.default_vesting_duration = default_vesting_duration_unwrapped
+            }
+            Self::validate_airdrop_calculation_variables(
+                self.default_collectable_at_tge_percentage,
+                self.default_cliff_duration,
+                self.default_vesting_duration,
+            )?;
+
+            // Will not let me check exact error
+            // when Config is returned
+            Ok(())
+        }
+
         #[ink(message)]
         pub fn update_recipient(
             &mut self,
@@ -311,23 +383,11 @@ mod az_airdrop {
             if let Some(vesting_duration_unwrapped) = vesting_duration {
                 recipient.vesting_duration = vesting_duration_unwrapped
             }
-            if recipient.collectable_at_tge_percentage > 100 {
-                return Err(AzAirdropError::UnprocessableEntity(
-                    "collectable_at_tge_percentage must be less than or equal to 100".to_string(),
-                ));
-            } else if recipient.collectable_at_tge_percentage == 100 {
-                if recipient.cliff_duration > 0 || recipient.vesting_duration > 0 {
-                    return Err(AzAirdropError::UnprocessableEntity(
-                        "cliff_duration and vesting_duration must be 0 when collectable_tge_percentage is 100"
-                            .to_string(),
-                    ));
-                }
-            } else if recipient.vesting_duration == 0 {
-                return Err(AzAirdropError::UnprocessableEntity(
-                    "vesting_duration must be greater than 0 when collectable_tge_percentage is not 100"
-                        .to_string(),
-                ));
-            }
+            Self::validate_airdrop_calculation_variables(
+                recipient.collectable_at_tge_percentage,
+                recipient.cliff_duration,
+                recipient.vesting_duration,
+            )?;
 
             self.recipients.insert(address, &recipient);
 
@@ -362,6 +422,32 @@ mod az_airdrop {
                 return Err(AzAirdropError::Unauthorised);
             }
         }
+
+        fn validate_airdrop_calculation_variables(
+            collectable_at_tge_percentage: u8,
+            cliff_duration: Timestamp,
+            vesting_duration: Timestamp,
+        ) -> Result<()> {
+            if collectable_at_tge_percentage > 100 {
+                return Err(AzAirdropError::UnprocessableEntity(
+                    "collectable_at_tge_percentage must be less than or equal to 100".to_string(),
+                ));
+            } else if collectable_at_tge_percentage == 100 {
+                if cliff_duration > 0 || vesting_duration > 0 {
+                    return Err(AzAirdropError::UnprocessableEntity(
+                        "cliff_duration and vesting_duration must be 0 when collectable_tge_percentage is 100"
+                            .to_string(),
+                    ));
+                }
+            } else if vesting_duration == 0 {
+                return Err(AzAirdropError::UnprocessableEntity(
+                    "vesting_duration must be greater than 0 when collectable_tge_percentage is not 100"
+                        .to_string(),
+                ));
+            }
+
+            Ok(())
+        }
     }
 
     #[cfg(test)]
@@ -378,7 +464,7 @@ mod az_airdrop {
         fn init() -> (DefaultAccounts<DefaultEnvironment>, AzAirdrop) {
             let accounts = default_accounts();
             set_caller::<DefaultEnvironment>(accounts.bob);
-            let az_airdrop = AzAirdrop::new(mock_token(), MOCK_START, 0, 0, 0);
+            let az_airdrop = AzAirdrop::new(mock_token(), MOCK_START, 100, 0, 0).unwrap();
             (accounts, az_airdrop)
         }
 
@@ -388,6 +474,15 @@ mod az_airdrop {
         }
 
         // === TESTS ===
+        // === TEST CONSTRUCTOR ===
+        #[ink::test]
+        fn test_new() {
+            let accounts: DefaultAccounts<DefaultEnvironment> = default_accounts();
+            set_caller::<DefaultEnvironment>(accounts.bob);
+            let result = AzAirdrop::new(mock_token(), MOCK_START, 0, 0, 0);
+            assert!(result.is_err());
+        }
+
         // === TEST QUERIES ===
         #[ink::test]
         fn test_collectable_amount() {
@@ -470,7 +565,7 @@ mod az_airdrop {
                 az_airdrop.sub_admins_as_vec.get_or_default()
             );
             assert_eq!(config.start, MOCK_START);
-            assert_eq!(config.default_collectable_at_tge_percentage, 0);
+            assert_eq!(config.default_collectable_at_tge_percentage, 100);
             assert_eq!(config.default_cliff_duration, 0);
             assert_eq!(config.default_vesting_duration, 0);
         }
@@ -673,6 +768,78 @@ mod az_airdrop {
             assert_eq!(result, Err(AzAirdropError::Unauthorised));
             // === * it reduces the total_amount
             assert_eq!(az_airdrop.to_be_collected, 1);
+        }
+
+        #[ink::test]
+        fn test_update_config() {
+            let (accounts, mut az_airdrop) = init();
+            // when called by admin
+            // = when new admin is provided
+            az_airdrop
+                .update_config(Some(accounts.django), None, None, None, None)
+                .unwrap();
+            // = * it updates the admin
+            let config: Config = az_airdrop.config();
+            assert_eq!(config.admin, accounts.django);
+            set_caller::<DefaultEnvironment>(accounts.django);
+            // = when new start is provided
+            // == when new start is before or equal to current time stamp
+            let current_timestamp: Timestamp = 5;
+            ink::env::test::set_block_timestamp::<ink::env::DefaultEnvironment>(current_timestamp);
+            let result = az_airdrop.update_config(None, Some(current_timestamp), None, None, None);
+            // == * it raises an error
+            assert_eq!(
+                result,
+                Err(AzAirdropError::UnprocessableEntity(
+                    "New start time must be in the future".to_string()
+                ))
+            );
+            // == when new start is after current time stamp
+            // === when to_be_collected is positive
+            az_airdrop.to_be_collected = 1;
+            // === * it raises an error
+            let result =
+                az_airdrop.update_config(None, Some(current_timestamp + 1), None, None, None);
+            assert_eq!(
+                result,
+                Err(AzAirdropError::UnprocessableEntity(
+                    "to_be_collected must be zero when changing start time".to_string()
+                ))
+            );
+            // === when to_be_collected is zero
+            az_airdrop.to_be_collected = 0;
+            // === * it updates the start time
+            az_airdrop
+                .update_config(None, Some(current_timestamp + 1), None, None, None)
+                .unwrap();
+            let mut config: Config = az_airdrop.config();
+            assert_eq!(config.start, current_timestamp + 1);
+            // = when new default_collectable_at_tge_percentage is provided
+            // == when airdrop calculation variable combination is invalid
+            // == * it raises an error
+            let result = az_airdrop.update_config(None, None, Some(50), None, None);
+            assert_eq!(
+                result,
+                Err(AzAirdropError::UnprocessableEntity(
+                    "vesting_duration must be greater than 0 when collectable_tge_percentage is not 100"
+                        .to_string(),
+                ))
+            );
+            // == when airdrop calculation variable combination is valid
+            az_airdrop
+                .update_config(None, None, Some(50), Some(50), Some(50))
+                .unwrap();
+            // == * it updates the default_collectable_at_tge_percentage
+            config = az_airdrop.config();
+            assert_eq!(config.default_collectable_at_tge_percentage, 50);
+            assert_eq!(config.default_cliff_duration, 50);
+            assert_eq!(config.default_vesting_duration, 50);
+            // No need to test the other default fields as test above does that
+            // when called by non-admin
+            set_caller::<DefaultEnvironment>(accounts.charlie);
+            // * it raises an error
+            let result = az_airdrop.update_config(None, None, None, None, None);
+            assert_eq!(result, Err(AzAirdropError::Unauthorised));
         }
 
         #[ink::test]
