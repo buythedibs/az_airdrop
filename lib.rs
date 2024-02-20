@@ -8,7 +8,7 @@ mod az_airdrop {
     use ink::{
         codegen::EmitEvent,
         env::CallFlags,
-        prelude::string::ToString,
+        prelude::string::{String, ToString},
         prelude::{vec, vec::Vec},
         reflect::ContractEventBase,
         storage::{Lazy, Mapping},
@@ -22,6 +22,14 @@ mod az_airdrop {
     // === EVENTS ===
     #[ink(event)]
     pub struct AddToRecipient {
+        #[ink(topic)]
+        address: AccountId,
+        amount: Balance,
+        description: Option<String>,
+    }
+
+    #[ink(event)]
+    pub struct SubtractFromRecipient {
         #[ink(topic)]
         address: AccountId,
         amount: Balance,
@@ -277,6 +285,7 @@ mod az_airdrop {
             &mut self,
             address: AccountId,
             amount: Balance,
+            description: Option<String>,
         ) -> Result<Recipient> {
             self.authorise_to_update_recipient()?;
             self.airdrop_has_not_started()?;
@@ -293,6 +302,16 @@ mod az_airdrop {
 
             // Update config
             self.to_be_collected -= amount;
+
+            // emit event
+            Self::emit_event(
+                self.env(),
+                Event::SubtractFromRecipient(SubtractFromRecipient {
+                    address,
+                    amount,
+                    description,
+                }),
+            );
 
             Ok(recipient)
         }
@@ -771,7 +790,7 @@ mod az_airdrop {
             // = when airdrop has started
             ink::env::test::set_block_timestamp::<ink::env::DefaultEnvironment>(az_airdrop.start);
             // = * it raises an error
-            let mut result = az_airdrop.subtract_from_recipient(recipient_address, amount);
+            let mut result = az_airdrop.subtract_from_recipient(recipient_address, amount, None);
             assert_eq!(
                 result,
                 Err(AzAirdropError::UnprocessableEntity(
@@ -784,7 +803,7 @@ mod az_airdrop {
             );
             // == when recipient does not exist
             // == * it raises an error
-            result = az_airdrop.subtract_from_recipient(recipient_address, amount);
+            result = az_airdrop.subtract_from_recipient(recipient_address, amount, None);
             assert_eq!(
                 result,
                 Err(AzAirdropError::NotFound("Recipient".to_string()))
@@ -802,7 +821,7 @@ mod az_airdrop {
             );
             // === when amount is greater than the recipient's total amount
             // === * it returns an error
-            result = az_airdrop.subtract_from_recipient(recipient_address, amount + 1);
+            result = az_airdrop.subtract_from_recipient(recipient_address, amount + 1, None);
             assert_eq!(
                 result,
                 Err(AzAirdropError::UnprocessableEntity(
@@ -813,14 +832,14 @@ mod az_airdrop {
             az_airdrop.to_be_collected += amount;
             // === * it reduces the total_amount by the amount
             az_airdrop
-                .subtract_from_recipient(recipient_address, amount - 1)
+                .subtract_from_recipient(recipient_address, amount - 1, None)
                 .unwrap();
             let recipient: Recipient = az_airdrop.recipients.get(recipient_address).unwrap();
             assert_eq!(recipient.total_amount, 1);
             // when called by non-admin or non-sub-admin
             set_caller::<DefaultEnvironment>(accounts.charlie);
             // * it raises an error
-            result = az_airdrop.subtract_from_recipient(recipient_address, amount);
+            result = az_airdrop.subtract_from_recipient(recipient_address, amount, None);
             assert_eq!(result, Err(AzAirdropError::Unauthorised));
             // === * it reduces the total_amount
             assert_eq!(az_airdrop.to_be_collected, 1);
