@@ -14,6 +14,7 @@ mod az_airdrop {
         storage::{Lazy, Mapping},
     };
     use openbrush::contracts::psp22::PSP22Ref;
+    use primitive_types::U256;
 
     // === TYPES ===
     type Event = <AzAirdrop as ContractEventBase>::Type;
@@ -125,8 +126,10 @@ mod az_airdrop {
             if timestamp >= self.start {
                 // collectable at tge
                 let collectable_at_tge: Balance =
-                    Balance::from(recipient.collectable_at_tge_percentage) * recipient.total_amount
-                        / 100;
+                    (U256::from(recipient.collectable_at_tge_percentage)
+                        * U256::from(recipient.total_amount)
+                        / U256::from(100))
+                    .as_u128();
                 total_collectable_at_time = collectable_at_tge;
                 if recipient.vesting_duration > 0 {
                     // cliff_duration
