@@ -231,6 +231,27 @@ mod az_airdrop {
         }
 
         #[ink(message)]
+        pub fn return_spare_tokens(&self) -> Result<Balance> {
+            let caller: AccountId = Self::env().caller();
+            let contract_address: AccountId = Self::env().account_id();
+            Self::authorise(caller, self.admin)?;
+
+            let balance: Balance = PSP22Ref::balance_of(&self.token, contract_address);
+            let spare_amount: Balance = balance - self.to_be_collected;
+            if spare_amount > 0 {
+                PSP22Ref::transfer_builder(&self.token, caller, spare_amount, vec![])
+                    .call_flags(CallFlags::default())
+                    .invoke()?;
+            } else {
+                return Err(AzAirdropError::UnprocessableEntity(
+                    "Amount is zero".to_string(),
+                ));
+            }
+
+            Ok(spare_amount)
+        }
+
+        #[ink(message)]
         pub fn subtract_from_recipient(
             &mut self,
             address: AccountId,
@@ -633,6 +654,18 @@ mod az_airdrop {
             );
             // = when collectable amount is positive
             // THE REST NEEDS TO HAPPEN IN INTEGRATION TESTS
+        }
+
+        #[ink::test]
+        fn test_return_spare_token() {
+            let (accounts, az_airdrop) = init();
+            // when called by admin
+            // THIS NEEDS TO HAPPEN IN INTEGRATION TESTS
+            // when called by non-admin
+            // * it raises an error
+            set_caller::<DefaultEnvironment>(accounts.charlie);
+            let result = az_airdrop.return_spare_tokens();
+            assert_eq!(result, Err(AzAirdropError::Unauthorised));
         }
 
         #[ink::test]
@@ -1062,9 +1095,16 @@ mod az_airdrop {
             Ok(())
         }
 
+        // I CAN'T MODIFY TIMESTAMP WITH INK_E2E, PLEASE TEST MANUALLY THAT
+        // = * it transfers the collectable amount to the recipient
+        // = * it increases the recipient's collected by the collectable amount
+        // = * it reduces the to_be_collected by the collectable amount
+        // #[ink_e2e::test]
+        // async fn test_collect(mut client: ::ink_e2e::Client<C, E>) -> E2EResult<()> {}
+
         #[ink_e2e::test]
-        async fn test_collect(mut client: ::ink_e2e::Client<C, E>) -> E2EResult<()> {
-            let bob_account_id: AccountId = account_id(ink_e2e::bob());
+        async fn test_return_spare_token(mut client: ::ink_e2e::Client<C, E>) -> E2EResult<()> {
+            let alice_account_id: AccountId = account_id(ink_e2e::alice());
 
             // Instantiate token
             let token_constructor = ButtonRef::new(
@@ -1102,7 +1142,22 @@ mod az_airdrop {
                 .expect("Airdrop instantiate failed")
                 .account_id;
 
-            // transfer tokens to airdrop smart contract
+            // when called by an admin
+            // = when there is no spare token
+            // = * it raises an error
+            let return_spare_tokens_message = build_message::<AzAirdropRef>(airdrop_id)
+                .call(|airdrop| airdrop.return_spare_tokens());
+            let result = client
+                .call_dry_run(&ink_e2e::alice(), &return_spare_tokens_message, 0, None)
+                .await
+                .return_value();
+            assert_eq!(
+                result,
+                Err(AzAirdropError::UnprocessableEntity(
+                    "Amount is zero".to_string()
+                ))
+            );
+            // = when there is spare token
             let transfer_message = build_message::<ButtonRef>(token_id)
                 .call(|token| token.transfer(airdrop_id, 1, vec![]));
             let transfer_result = client
@@ -1113,26 +1168,27 @@ mod az_airdrop {
                 .exec_result
                 .result;
             assert!(transfer_result.is_ok());
-
-            // when caller is a recipient
-            // = when recipient's collectable amount is positive
-            // let add_to_recipient_message = build_message::<AzAirdropRef>(airdrop_id)
-            //     .call(|airdrop| airdrop.add_to_recipient(bob_account_id, 1));
-            // client
-            //     .call(&ink_e2e::alice(), add_to_recipient_message, 0, None)
-            //     .await
-            //     .unwrap();
-            // = collectable amount is positive
-            // let collect_message =
-            //     build_message::<AzAirdropRef>(airdrop_id).call(|airdrop| airdrop.collect());
-            // client
-            //     .call(&ink_e2e::bob(), collect_message, 0, None)
-            //     .await
-            //     .unwrap();
-            // I CAN'T MODIFY TIMESTAMP WITH INK_E2E, PLEASE TEST MANUALLY THAT
-            // = * it transfers the collectable amount to the recipient
-            // = * it increases the recipient's collected by the collectable amount
-            // = * it reduces the to_be_collected by the collectable amount
+            // = * it returns the spare token to admin
+            let return_spare_tokens_message = build_message::<AzAirdropRef>(airdrop_id)
+                .call(|airdrop| airdrop.return_spare_tokens());
+            client
+                .call(&ink_e2e::alice(), return_spare_tokens_message, 0, None)
+                .await
+                .unwrap();
+            let balance_message =
+                build_message::<ButtonRef>(token_id).call(|button| button.balance_of(airdrop_id));
+            let result = client
+                .call_dry_run(&ink_e2e::alice(), &balance_message, 0, None)
+                .await
+                .return_value();
+            assert_eq!(result, 0);
+            let balance_message = build_message::<ButtonRef>(token_id)
+                .call(|button| button.balance_of(alice_account_id));
+            let result = client
+                .call_dry_run(&ink_e2e::alice(), &balance_message, 0, None)
+                .await
+                .return_value();
+            assert_eq!(result, MOCK_AMOUNT);
 
             Ok(())
         }
