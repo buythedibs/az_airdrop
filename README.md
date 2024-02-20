@@ -38,7 +38,9 @@ cargo test --features e2e-tests
 
 1. Build contract:
 ```sh
-cargo contract build --release
+# You may need to run
+# chmod +x build.sh f
+./build.sh
 ```
 2. If setting up locally, start a local development chain.
 ```sh

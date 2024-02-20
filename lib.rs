@@ -225,8 +225,6 @@ mod az_airdrop {
             // increase recipient's collected
             recipient.collected += collectable_amount;
             self.recipients.insert(caller, &recipient);
-
-            // should we reduce amount committed to airdrop for returning tokens logic?
             self.to_be_collected -= collectable_amount;
 
             Ok(collectable_amount)
@@ -971,9 +969,9 @@ mod az_airdrop {
             // Instantiate token
             let token_constructor = ButtonRef::new(
                 MOCK_AMOUNT,
-                Some("Button".to_string()),
-                Some("BTN".to_string()),
-                6,
+                Some("DIBS".to_string()),
+                Some("DIBS".to_string()),
+                12,
             );
             let token_id: AccountId = client
                 .instantiate("az_button", &ink_e2e::alice(), token_constructor, 0, None)
@@ -984,7 +982,7 @@ mod az_airdrop {
             // Instantiate airdrop smart contract
             let default_collectable_at_tge_percentage: u8 = 20;
             let default_cliff_duration: Timestamp = 0;
-            let default_vesting_duration: Timestamp = 31556952000;
+            let default_vesting_duration: Timestamp = 31_556_952_000;
             let airdrop_constructor = AzAirdropRef::new(
                 token_id,
                 MOCK_START,
@@ -1060,6 +1058,81 @@ mod az_airdrop {
                 .await
                 .return_value();
             assert_eq!(config.to_be_collected, 1);
+
+            Ok(())
+        }
+
+        #[ink_e2e::test]
+        async fn test_collect(mut client: ::ink_e2e::Client<C, E>) -> E2EResult<()> {
+            let bob_account_id: AccountId = account_id(ink_e2e::bob());
+
+            // Instantiate token
+            let token_constructor = ButtonRef::new(
+                MOCK_AMOUNT,
+                Some("DIBS".to_string()),
+                Some("DIBS".to_string()),
+                12,
+            );
+            let token_id: AccountId = client
+                .instantiate("az_button", &ink_e2e::alice(), token_constructor, 0, None)
+                .await
+                .expect("Token instantiate failed")
+                .account_id;
+
+            // Instantiate airdrop smart contract
+            let default_collectable_at_tge_percentage: u8 = 20;
+            let default_cliff_duration: Timestamp = 0;
+            let default_vesting_duration: Timestamp = 31_556_952_000;
+            let airdrop_constructor = AzAirdropRef::new(
+                token_id,
+                MOCK_START,
+                default_collectable_at_tge_percentage,
+                default_cliff_duration,
+                default_vesting_duration,
+            );
+            let airdrop_id: AccountId = client
+                .instantiate(
+                    "az_airdrop",
+                    &ink_e2e::alice(),
+                    airdrop_constructor,
+                    0,
+                    None,
+                )
+                .await
+                .expect("Airdrop instantiate failed")
+                .account_id;
+
+            // transfer tokens to airdrop smart contract
+            let transfer_message = build_message::<ButtonRef>(token_id)
+                .call(|token| token.transfer(airdrop_id, 1, vec![]));
+            let transfer_result = client
+                .call(&ink_e2e::alice(), transfer_message, 0, None)
+                .await
+                .unwrap()
+                .dry_run
+                .exec_result
+                .result;
+            assert!(transfer_result.is_ok());
+
+            // when caller is a recipient
+            // = when recipient's collectable amount is positive
+            // let add_to_recipient_message = build_message::<AzAirdropRef>(airdrop_id)
+            //     .call(|airdrop| airdrop.add_to_recipient(bob_account_id, 1));
+            // client
+            //     .call(&ink_e2e::alice(), add_to_recipient_message, 0, None)
+            //     .await
+            //     .unwrap();
+            // = collectable amount is positive
+            // let collect_message =
+            //     build_message::<AzAirdropRef>(airdrop_id).call(|airdrop| airdrop.collect());
+            // client
+            //     .call(&ink_e2e::bob(), collect_message, 0, None)
+            //     .await
+            //     .unwrap();
+            // I CAN'T MODIFY TIMESTAMP WITH INK_E2E, PLEASE TEST MANUALLY THAT
+            // = * it transfers the collectable amount to the recipient
+            // = * it increases the recipient's collected by the collectable amount
+            // = * it reduces the to_be_collected by the collectable amount
 
             Ok(())
         }
