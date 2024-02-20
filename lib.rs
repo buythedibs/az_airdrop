@@ -90,6 +90,7 @@ mod az_airdrop {
             default_vesting_duration: Timestamp,
         ) -> Result<Self> {
             Self::validate_airdrop_calculation_variables(
+                start,
                 default_collectable_at_tge_percentage,
                 default_cliff_duration,
                 default_vesting_duration,
@@ -411,6 +412,7 @@ mod az_airdrop {
                 self.default_vesting_duration = default_vesting_duration_unwrapped
             }
             Self::validate_airdrop_calculation_variables(
+                self.start,
                 self.default_collectable_at_tge_percentage,
                 self.default_cliff_duration,
                 self.default_vesting_duration,
@@ -443,6 +445,7 @@ mod az_airdrop {
                 recipient.vesting_duration = vesting_duration_unwrapped
             }
             Self::validate_airdrop_calculation_variables(
+                self.start,
                 recipient.collectable_at_tge_percentage,
                 recipient.cliff_duration,
                 recipient.vesting_duration,
@@ -487,6 +490,7 @@ mod az_airdrop {
         }
 
         fn validate_airdrop_calculation_variables(
+            start: Timestamp,
             collectable_at_tge_percentage: u8,
             cliff_duration: Timestamp,
             vesting_duration: Timestamp,
@@ -505,6 +509,14 @@ mod az_airdrop {
             } else if vesting_duration == 0 {
                 return Err(AzAirdropError::UnprocessableEntity(
                     "vesting_duration must be greater than 0 when collectable_tge_percentage is not 100"
+                        .to_string(),
+                ));
+            }
+            let end_timestamp: u128 =
+                u128::from(start) + u128::from(cliff_duration) + u128::from(vesting_duration);
+            if end_timestamp > Timestamp::MAX.into() {
+                return Err(AzAirdropError::UnprocessableEntity(
+                    "Combination of start, cliff_duration and vesting_duration exceeds limit"
                         .to_string(),
                 ));
             }
@@ -897,6 +909,21 @@ mod az_airdrop {
                 result,
                 Err(AzAirdropError::UnprocessableEntity(
                     "vesting_duration must be greater than 0 when collectable_tge_percentage is not 100"
+                        .to_string(),
+                ))
+            );
+            // == when combination of start, cliff_duration and vesting_duration exceeds Timestamp max
+            let result = az_airdrop.update_config(
+                None,
+                None,
+                Some(50),
+                Some((Timestamp::MAX / 2) - az_airdrop.start + 2),
+                Some(Timestamp::MAX / 2),
+            );
+            assert_eq!(
+                result,
+                Err(AzAirdropError::UnprocessableEntity(
+                    "Combination of start, cliff_duration and vesting_duration exceeds limit"
                         .to_string(),
                 ))
             );
