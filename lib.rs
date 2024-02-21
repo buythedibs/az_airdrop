@@ -181,7 +181,7 @@ mod az_airdrop {
         // === HANDLES ===
         // Not a must, but good to have function
         #[ink(message)]
-        pub fn acquire_token(&self, amount: Balance, from: AccountId) -> Result<()> {
+        pub fn acquire_token(&mut self, amount: Balance, from: AccountId) -> Result<()> {
             let caller: AccountId = Self::env().caller();
             Self::authorise(caller, self.admin)?;
             self.airdrop_has_not_started()?;
