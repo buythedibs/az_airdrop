@@ -314,11 +314,13 @@ mod az_airdrop {
             }
 
             // Update recipient
+            // This can't overflow because of the above check
             recipient.total_amount -= amount;
             self.recipients.insert(address, &recipient);
 
             // Update config
-            self.to_be_collected -= amount;
+            // This can't overflow but might as well
+            self.to_be_collected = self.to_be_collected.saturating_sub(amount);
 
             // emit event
             Self::emit_event(
@@ -528,6 +530,7 @@ mod az_airdrop {
                         .to_string(),
                 ));
             }
+            // This can't over flow because all values are u64
             let end_timestamp: u128 =
                 u128::from(start) + u128::from(cliff_duration) + u128::from(vesting_duration);
             if end_timestamp > Timestamp::MAX.into() {
