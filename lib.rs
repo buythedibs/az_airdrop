@@ -276,7 +276,7 @@ mod az_airdrop {
         }
 
         #[ink(message)]
-        pub fn return_spare_tokens(&self) -> Result<Balance> {
+        pub fn return_spare_tokens(&mut self) -> Result<Balance> {
             let caller: AccountId = Self::env().caller();
             let contract_address: AccountId = Self::env().account_id();
             Self::authorise(caller, self.admin)?;
