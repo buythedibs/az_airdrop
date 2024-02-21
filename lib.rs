@@ -267,9 +267,10 @@ mod az_airdrop {
                 .call_flags(CallFlags::default())
                 .invoke()?;
             // increase recipient's collected
-            recipient.collected += collectable_amount;
+            // These can't overflow, but might as well
+            recipient.collected = recipient.collected.saturating_add(collectable_amount);
             self.recipients.insert(caller, &recipient);
-            self.to_be_collected -= collectable_amount;
+            self.to_be_collected = self.to_be_collected.saturating_sub(collectable_amount);
 
             Ok(collectable_amount)
         }
@@ -281,7 +282,8 @@ mod az_airdrop {
             Self::authorise(caller, self.admin)?;
 
             let balance: Balance = PSP22Ref::balance_of(&self.token, contract_address);
-            let spare_amount: Balance = balance - self.to_be_collected;
+            // These can't overflow, but might as well
+            let spare_amount: Balance = balance.saturating_sub(self.to_be_collected);
             if spare_amount > 0 {
                 PSP22Ref::transfer_builder(&self.token, caller, spare_amount, vec![])
                     .call_flags(CallFlags::default())
