@@ -132,17 +132,21 @@ mod az_airdrop {
                     .as_u128();
                 total_collectable_at_time = collectable_at_tge;
                 if recipient.vesting_duration > 0 {
-                    // cliff_duration
+                    // This can't overflow as checks are done in validate_airdrop_calculation_variables
                     let vesting_start: Timestamp = self.start + recipient.cliff_duration;
                     let mut vesting_collectable: Balance = 0;
                     if timestamp >= vesting_start {
+                        // This can't overflow
                         let vesting_time_reached: Timestamp = timestamp - vesting_start;
+                        // This can't overflow
                         let collectable_during_vesting: Balance =
                             recipient.total_amount - collectable_at_tge;
-                        vesting_collectable = Balance::from(vesting_time_reached)
-                            * collectable_during_vesting
-                            / Balance::from(recipient.vesting_duration)
+                        vesting_collectable = (U256::from(vesting_time_reached)
+                            * U256::from(collectable_during_vesting)
+                            / U256::from(recipient.vesting_duration))
+                        .as_u128();
                     }
+                    // This can't overflow
                     total_collectable_at_time = total_collectable_at_time + vesting_collectable;
                 }
                 if total_collectable_at_time > recipient.total_amount {
@@ -150,7 +154,7 @@ mod az_airdrop {
                 }
             }
 
-            Ok(total_collectable_at_time - recipient.collected)
+            Ok(total_collectable_at_time.saturating_sub(recipient.collected))
         }
 
         #[ink(message)]
@@ -205,37 +209,44 @@ mod az_airdrop {
         ) -> Result<Recipient> {
             self.authorise_to_update_recipient()?;
             self.airdrop_has_not_started()?;
-            // Check that balance has enough to cover
-            let smart_contract_balance: Balance =
-                PSP22Ref::balance_of(&self.token, Self::env().account_id());
-            if amount + self.to_be_collected > smart_contract_balance {
+            if let Some(new_to_be_collected) = amount.checked_add(self.to_be_collected) {
+                // Check that balance has enough to cover
+                let smart_contract_balance: Balance =
+                    PSP22Ref::balance_of(&self.token, Self::env().account_id());
+                if new_to_be_collected > smart_contract_balance {
+                    return Err(AzAirdropError::UnprocessableEntity(
+                        "Insufficient balance".to_string(),
+                    ));
+                }
+
+                let mut recipient: Recipient = self.recipients.get(address).unwrap_or(Recipient {
+                    total_amount: 0,
+                    collected: 0,
+                    collectable_at_tge_percentage: self.default_collectable_at_tge_percentage,
+                    cliff_duration: self.default_cliff_duration,
+                    vesting_duration: self.default_vesting_duration,
+                });
+                // This can't overflow
+                recipient.total_amount += amount;
+                self.recipients.insert(address, &recipient);
+                self.to_be_collected = new_to_be_collected;
+
+                // emit event
+                Self::emit_event(
+                    self.env(),
+                    Event::AddToRecipient(AddToRecipient {
+                        address,
+                        amount,
+                        description,
+                    }),
+                );
+
+                Ok(recipient)
+            } else {
                 return Err(AzAirdropError::UnprocessableEntity(
-                    "Insufficient balance".to_string(),
+                    "Amount will cause to_be_collected to overflow".to_string(),
                 ));
             }
-
-            let mut recipient: Recipient = self.recipients.get(address).unwrap_or(Recipient {
-                total_amount: 0,
-                collected: 0,
-                collectable_at_tge_percentage: self.default_collectable_at_tge_percentage,
-                cliff_duration: self.default_cliff_duration,
-                vesting_duration: self.default_vesting_duration,
-            });
-            recipient.total_amount += amount;
-            self.recipients.insert(address, &recipient);
-            self.to_be_collected += amount;
-
-            // emit event
-            Self::emit_event(
-                self.env(),
-                Event::AddToRecipient(AddToRecipient {
-                    address,
-                    amount,
-                    description,
-                }),
-            );
-
-            Ok(recipient)
         }
 
         #[ink(message)]
@@ -673,9 +684,22 @@ mod az_airdrop {
                     "Airdrop has started".to_string(),
                 ))
             );
-            // THE REST NEEDS TO BE IN INK E2E TESTS, SEE BELOW.
             // = when airdrop has not started
-            // == when smart contract does not have the balance to cover amount
+            ink::env::test::set_block_timestamp::<ink::env::DefaultEnvironment>(
+                az_airdrop.start - 1,
+            );
+            // == when amount will cause overflow
+            az_airdrop.to_be_collected = Balance::MAX;
+            // == * it raises an error
+            result = az_airdrop.add_to_recipient(accounts.charlie, amount, None);
+            assert_eq!(
+                result,
+                Err(AzAirdropError::UnprocessableEntity(
+                    "Amount will cause to_be_collected to overflow".to_string(),
+                ))
+            );
+            // == when amount won't cause overflow
+            // THE REST NEEDS TO BE IN INK E2E TESTS, SEE BELOW.
         }
 
         #[ink::test]
