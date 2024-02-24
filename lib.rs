@@ -201,9 +201,35 @@ mod az_airdrop {
             Ok(())
         }
 
+        #[ink(message)]
+        pub fn collect(&mut self) -> Result<Balance> {
+            let caller: AccountId = Self::env().caller();
+            let mut recipient = self.show(caller)?;
+
+            let block_timestamp: Timestamp = Self::env().block_timestamp();
+            let collectable_amount: Balance = self.collectable_amount(caller, block_timestamp)?;
+            if collectable_amount == 0 {
+                return Err(AzAirdropError::UnprocessableEntity(
+                    "Amount is zero".to_string(),
+                ));
+            }
+
+            // transfer to caller
+            PSP22Ref::transfer_builder(&self.token, caller, collectable_amount, vec![])
+                .call_flags(CallFlags::default())
+                .invoke()?;
+            // increase recipient's collected
+            // These can't overflow, but might as well
+            recipient.collected = recipient.collected.saturating_add(collectable_amount);
+            self.recipients.insert(caller, &recipient);
+            self.to_be_collected = self.to_be_collected.saturating_sub(collectable_amount);
+
+            Ok(collectable_amount)
+        }
+
         // This is for the sales smart contract to call
         #[ink(message)]
-        pub fn add_to_recipient(
+        pub fn recipient_add(
             &mut self,
             address: AccountId,
             amount: Balance,
@@ -252,55 +278,7 @@ mod az_airdrop {
         }
 
         #[ink(message)]
-        pub fn collect(&mut self) -> Result<Balance> {
-            let caller: AccountId = Self::env().caller();
-            let mut recipient = self.show(caller)?;
-
-            let block_timestamp: Timestamp = Self::env().block_timestamp();
-            let collectable_amount: Balance = self.collectable_amount(caller, block_timestamp)?;
-            if collectable_amount == 0 {
-                return Err(AzAirdropError::UnprocessableEntity(
-                    "Amount is zero".to_string(),
-                ));
-            }
-
-            // transfer to caller
-            PSP22Ref::transfer_builder(&self.token, caller, collectable_amount, vec![])
-                .call_flags(CallFlags::default())
-                .invoke()?;
-            // increase recipient's collected
-            // These can't overflow, but might as well
-            recipient.collected = recipient.collected.saturating_add(collectable_amount);
-            self.recipients.insert(caller, &recipient);
-            self.to_be_collected = self.to_be_collected.saturating_sub(collectable_amount);
-
-            Ok(collectable_amount)
-        }
-
-        #[ink(message)]
-        pub fn return_spare_tokens(&mut self) -> Result<Balance> {
-            let caller: AccountId = Self::env().caller();
-            let contract_address: AccountId = Self::env().account_id();
-            Self::authorise(caller, self.admin)?;
-
-            let balance: Balance = PSP22Ref::balance_of(&self.token, contract_address);
-            // These can't overflow, but might as well
-            let spare_amount: Balance = balance.saturating_sub(self.to_be_collected);
-            if spare_amount > 0 {
-                PSP22Ref::transfer_builder(&self.token, caller, spare_amount, vec![])
-                    .call_flags(CallFlags::default())
-                    .invoke()?;
-            } else {
-                return Err(AzAirdropError::UnprocessableEntity(
-                    "Amount is zero".to_string(),
-                ));
-            }
-
-            Ok(spare_amount)
-        }
-
-        #[ink(message)]
-        pub fn subtract_from_recipient(
+        pub fn recipient_subtract(
             &mut self,
             address: AccountId,
             amount: Balance,
@@ -335,6 +313,28 @@ mod az_airdrop {
             );
 
             Ok(recipient)
+        }
+
+        #[ink(message)]
+        pub fn return_spare_tokens(&mut self) -> Result<Balance> {
+            let caller: AccountId = Self::env().caller();
+            let contract_address: AccountId = Self::env().account_id();
+            Self::authorise(caller, self.admin)?;
+
+            let balance: Balance = PSP22Ref::balance_of(&self.token, contract_address);
+            // These can't overflow, but might as well
+            let spare_amount: Balance = balance.saturating_sub(self.to_be_collected);
+            if spare_amount > 0 {
+                PSP22Ref::transfer_builder(&self.token, caller, spare_amount, vec![])
+                    .call_flags(CallFlags::default())
+                    .invoke()?;
+            } else {
+                return Err(AzAirdropError::UnprocessableEntity(
+                    "Amount is zero".to_string(),
+                ));
+            }
+
+            Ok(spare_amount)
         }
 
         #[ink(message)]
@@ -668,14 +668,14 @@ mod az_airdrop {
 
         // === TEST HANDLES ===
         #[ink::test]
-        fn test_add_to_recipient() {
+        fn test_recipient_add() {
             let (accounts, mut az_airdrop) = init();
             let amount: Balance = 5;
 
             // when caller is not authorised
             set_caller::<DefaultEnvironment>(accounts.charlie);
             // * it raises an error
-            let mut result = az_airdrop.add_to_recipient(accounts.charlie, amount, None);
+            let mut result = az_airdrop.recipient_add(accounts.charlie, amount, None);
             assert_eq!(result, Err(AzAirdropError::Unauthorised));
             // when caller is authorised
             set_caller::<DefaultEnvironment>(accounts.bob);
@@ -684,7 +684,7 @@ mod az_airdrop {
             // = when airdrop has started
             ink::env::test::set_block_timestamp::<ink::env::DefaultEnvironment>(az_airdrop.start);
             // = * it raises an error
-            result = az_airdrop.add_to_recipient(accounts.charlie, amount, None);
+            result = az_airdrop.recipient_add(accounts.charlie, amount, None);
             assert_eq!(
                 result,
                 Err(AzAirdropError::UnprocessableEntity(
@@ -698,7 +698,7 @@ mod az_airdrop {
             // == when amount will cause overflow
             az_airdrop.to_be_collected = Balance::MAX;
             // == * it raises an error
-            result = az_airdrop.add_to_recipient(accounts.charlie, amount, None);
+            result = az_airdrop.recipient_add(accounts.charlie, amount, None);
             assert_eq!(
                 result,
                 Err(AzAirdropError::UnprocessableEntity(
@@ -828,7 +828,7 @@ mod az_airdrop {
         }
 
         #[ink::test]
-        fn test_subtract_from_recipient() {
+        fn test_recipient_subtract() {
             let (accounts, mut az_airdrop) = init();
             let amount: Balance = 5;
             let recipient_address: AccountId = accounts.django;
@@ -836,7 +836,7 @@ mod az_airdrop {
             // = when airdrop has started
             ink::env::test::set_block_timestamp::<ink::env::DefaultEnvironment>(az_airdrop.start);
             // = * it raises an error
-            let mut result = az_airdrop.subtract_from_recipient(recipient_address, amount, None);
+            let mut result = az_airdrop.recipient_subtract(recipient_address, amount, None);
             assert_eq!(
                 result,
                 Err(AzAirdropError::UnprocessableEntity(
@@ -849,7 +849,7 @@ mod az_airdrop {
             );
             // == when recipient does not exist
             // == * it raises an error
-            result = az_airdrop.subtract_from_recipient(recipient_address, amount, None);
+            result = az_airdrop.recipient_subtract(recipient_address, amount, None);
             assert_eq!(
                 result,
                 Err(AzAirdropError::NotFound("Recipient".to_string()))
@@ -867,7 +867,7 @@ mod az_airdrop {
             );
             // === when amount is greater than the recipient's total amount
             // === * it returns an error
-            result = az_airdrop.subtract_from_recipient(recipient_address, amount + 1, None);
+            result = az_airdrop.recipient_subtract(recipient_address, amount + 1, None);
             assert_eq!(
                 result,
                 Err(AzAirdropError::UnprocessableEntity(
@@ -878,14 +878,14 @@ mod az_airdrop {
             az_airdrop.to_be_collected += amount;
             // === * it reduces the total_amount by the amount
             az_airdrop
-                .subtract_from_recipient(recipient_address, amount - 1, None)
+                .recipient_subtract(recipient_address, amount - 1, None)
                 .unwrap();
             let recipient: Recipient = az_airdrop.recipients.get(recipient_address).unwrap();
             assert_eq!(recipient.total_amount, 1);
             // when called by non-admin or non-sub-admin
             set_caller::<DefaultEnvironment>(accounts.charlie);
             // * it raises an error
-            result = az_airdrop.subtract_from_recipient(recipient_address, amount, None);
+            result = az_airdrop.recipient_subtract(recipient_address, amount, None);
             assert_eq!(result, Err(AzAirdropError::Unauthorised));
             // === * it reduces the total_amount
             assert_eq!(az_airdrop.to_be_collected, 1);
@@ -1100,7 +1100,7 @@ mod az_airdrop {
         // === TEST HANDLES ===
         // This is just to test when cheque has a token address associated with it
         #[ink_e2e::test]
-        async fn test_add_to_recipient(mut client: ::ink_e2e::Client<C, E>) -> E2EResult<()> {
+        async fn test_recipient_add(mut client: ::ink_e2e::Client<C, E>) -> E2EResult<()> {
             let bob_account_id: AccountId = account_id(ink_e2e::bob());
 
             // Instantiate token
@@ -1143,10 +1143,10 @@ mod az_airdrop {
             // = when airdrop has not started
             // == when smart contract does not have the balance to cover amount
             // == * it raises an error
-            let add_to_recipient_message = build_message::<AzAirdropRef>(airdrop_id)
-                .call(|airdrop| airdrop.add_to_recipient(bob_account_id, 1, None));
+            let recipient_add_message = build_message::<AzAirdropRef>(airdrop_id)
+                .call(|airdrop| airdrop.recipient_add(bob_account_id, 1, None));
             let result = client
-                .call_dry_run(&ink_e2e::alice(), &add_to_recipient_message, 0, None)
+                .call_dry_run(&ink_e2e::alice(), &recipient_add_message, 0, None)
                 .await
                 .return_value();
             assert_eq!(
@@ -1167,10 +1167,10 @@ mod az_airdrop {
                 .result;
             assert!(transfer_result.is_ok());
             // == * it adds to the recipient's total_amount and sets details with defaults if not provided and new
-            let add_to_recipient_message = build_message::<AzAirdropRef>(airdrop_id)
-                .call(|airdrop| airdrop.add_to_recipient(bob_account_id, 1, None));
+            let recipient_add_message = build_message::<AzAirdropRef>(airdrop_id)
+                .call(|airdrop| airdrop.recipient_add(bob_account_id, 1, None));
             client
-                .call(&ink_e2e::alice(), add_to_recipient_message, 0, None)
+                .call(&ink_e2e::alice(), recipient_add_message, 0, None)
                 .await
                 .unwrap();
             let show_message = build_message::<AzAirdropRef>(airdrop_id)
