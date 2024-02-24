@@ -41,14 +41,14 @@ mod az_airdrop {
     #[derive(Debug, Clone, scale::Encode, scale::Decode)]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
     pub struct Config {
-        admin: AccountId,
-        sub_admins: Vec<AccountId>,
-        token: AccountId,
-        to_be_collected: Balance,
-        start: Timestamp,
-        default_collectable_at_tge_percentage: u8,
-        default_cliff_duration: Timestamp,
-        default_vesting_duration: Timestamp,
+        pub admin: AccountId,
+        pub sub_admins: Vec<AccountId>,
+        pub token: AccountId,
+        pub to_be_collected: Balance,
+        pub start: Timestamp,
+        pub default_collectable_at_tge_percentage: u8,
+        pub default_cliff_duration: Timestamp,
+        pub default_vesting_duration: Timestamp,
     }
 
     #[derive(scale::Decode, scale::Encode, Debug, Clone, PartialEq)]
@@ -57,14 +57,14 @@ mod az_airdrop {
         derive(scale_info::TypeInfo, ink::storage::traits::StorageLayout)
     )]
     pub struct Recipient {
-        total_amount: Balance,
-        collected: Balance,
+        pub total_amount: Balance,
+        pub collected: Balance,
         // % of total_amount
-        collectable_at_tge_percentage: u8,
+        pub collectable_at_tge_percentage: u8,
         // ms from start user has to wait before either starting vesting, or collecting remaining available.
-        cliff_duration: Timestamp,
+        pub cliff_duration: Timestamp,
         // ms to collect all remaining after collection at tge
-        vesting_duration: Timestamp,
+        pub vesting_duration: Timestamp,
     }
 
     // === CONTRACT ===
@@ -746,7 +746,7 @@ mod az_airdrop {
 
         #[ink::test]
         fn test_return_spare_token() {
-            let (accounts, az_airdrop) = init();
+            let (accounts, mut az_airdrop) = init();
             // when called by admin
             // THIS NEEDS TO HAPPEN IN INTEGRATION TESTS
             // when called by non-admin
@@ -1073,7 +1073,6 @@ mod az_airdrop {
         }
     }
 
-    // The main purpose of the e2e tests are to test the interactions with az groups contract
     #[cfg(all(test, feature = "e2e-tests"))]
     mod e2e_tests {
         use super::*;
