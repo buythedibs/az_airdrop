@@ -24,18 +24,20 @@ mod az_airdrop {
 
     // === EVENTS ===
     #[ink(event)]
-    pub struct AddToRecipient {
+    pub struct RecipientAdd {
         #[ink(topic)]
         address: AccountId,
         amount: Balance,
+        caller: AccountId,
         description: Option<String>,
     }
 
     #[ink(event)]
-    pub struct SubtractFromRecipient {
+    pub struct RecipientSubtract {
         #[ink(topic)]
         address: AccountId,
         amount: Balance,
+        caller: AccountId,
         description: Option<String>,
     }
 
@@ -262,9 +264,10 @@ mod az_airdrop {
                 // emit event
                 Self::emit_event(
                     self.env(),
-                    Event::AddToRecipient(AddToRecipient {
+                    Event::RecipientAdd(RecipientAdd {
                         address,
                         amount,
+                        caller: Self::env().caller(),
                         description,
                     }),
                 );
@@ -305,9 +308,10 @@ mod az_airdrop {
             // emit event
             Self::emit_event(
                 self.env(),
-                Event::SubtractFromRecipient(SubtractFromRecipient {
+                Event::RecipientSubtract(RecipientSubtract {
                     address,
                     amount,
+                    caller: Self::env().caller(),
                     description,
                 }),
             );
