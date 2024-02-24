@@ -1,5 +1,7 @@
 #![cfg_attr(not(feature = "std"), no_std, no_main)]
 
+pub use self::az_airdrop::AzAirdropRef;
+
 mod errors;
 
 #[ink::contract]
